@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <generator>poly2metalink</generator>
+  <published>2026-02-02T19:34:08Z</published>
+  <file name="668000_5424000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=668000,5424000,669000,5425000</url>
+  </file>
+  <file name="668000_5425000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=668000,5425000,669000,5426000</url>
+  </file>
+  <file name="668000_5426000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=668000,5426000,669000,5427000</url>
+  </file>
+  <file name="668000_5427000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=668000,5427000,669000,5428000</url>
+  </file>
+  <file name="668000_5428000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=668000,5428000,669000,5429000</url>
+  </file>
+  <file name="669000_5424000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=669000,5424000,670000,5425000</url>
+  </file>
+  <file name="669000_5425000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=669000,5425000,670000,5426000</url>
+  </file>
+  <file name="669000_5426000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=669000,5426000,670000,5427000</url>
+  </file>
+  <file name="669000_5427000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=669000,5427000,670000,5428000</url>
+  </file>
+  <file name="669000_5428000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=669000,5428000,670000,5429000</url>
+  </file>
+  <file name="670000_5424000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=670000,5424000,671000,5425000</url>
+  </file>
+  <file name="670000_5425000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=670000,5425000,671000,5426000</url>
+  </file>
+  <file name="670000_5426000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=670000,5426000,671000,5427000</url>
+  </file>
+  <file name="670000_5427000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=670000,5427000,671000,5428000</url>
+  </file>
+  <file name="670000_5428000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=670000,5428000,671000,5429000</url>
+  </file>
+  <file name="671000_5424000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=671000,5424000,672000,5425000</url>
+  </file>
+  <file name="671000_5425000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=671000,5425000,672000,5426000</url>
+  </file>
+  <file name="671000_5426000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=671000,5426000,672000,5427000</url>
+  </file>
+  <file name="671000_5427000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=671000,5427000,672000,5428000</url>
+  </file>
+  <file name="671000_5428000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=671000,5428000,672000,5429000</url>
+  </file>
+  <file name="672000_5424000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=672000,5424000,673000,5425000</url>
+  </file>
+  <file name="672000_5425000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=672000,5425000,673000,5426000</url>
+  </file>
+  <file name="672000_5426000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=672000,5426000,673000,5427000</url>
+  </file>
+  <file name="672000_5427000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=672000,5427000,673000,5428000</url>
+  </file>
+  <file name="672000_5428000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=672000,5428000,673000,5429000</url>
+  </file>
+  <file name="673000_5424000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=673000,5424000,674000,5425000</url>
+  </file>
+  <file name="673000_5425000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=673000,5425000,674000,5426000</url>
+  </file>
+  <file name="673000_5426000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=673000,5426000,674000,5427000</url>
+  </file>
+  <file name="673000_5427000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=673000,5427000,674000,5428000</url>
+  </file>
+  <file name="673000_5428000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=673000,5428000,674000,5429000</url>
+  </file>
+  <file name="674000_5424000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=674000,5424000,675000,5425000</url>
+  </file>
+  <file name="674000_5425000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=674000,5425000,675000,5426000</url>
+  </file>
+  <file name="674000_5426000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=674000,5426000,675000,5427000</url>
+  </file>
+  <file name="674000_5427000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=674000,5427000,675000,5428000</url>
+  </file>
+  <file name="674000_5428000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=674000,5428000,675000,5429000</url>
+  </file>
+  <file name="675000_5424000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=675000,5424000,676000,5425000</url>
+  </file>
+  <file name="675000_5425000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=675000,5425000,676000,5426000</url>
+  </file>
+  <file name="675000_5426000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=675000,5426000,676000,5427000</url>
+  </file>
+  <file name="675000_5427000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=675000,5427000,676000,5428000</url>
+  </file>
+  <file name="675000_5428000.tiff">
+    <url>https://geoservices.bayern.de/pro/wms/dgm/v1/relief?service=wms&amp;version=1.1.1&amp;request=GetMap&amp;format=image/tiff&amp;transparent=true&amp;layers=by_relief_schraeglicht&amp;srs=EPSG:25832&amp;STYLES=&amp;DPI=300&amp;MAP_RESOLUTION=300&amp;FORMAT_OPTIONS=dpi:300&amp;WIDTH=5906&amp;HEIGHT=5906&amp;BBOX=675000,5428000,676000,5429000</url>
+  </file>
+</metalink>
