@@ -1,49 +1,37 @@
 @echo off
+setlocal
+
 echo ===================================================
-echo        OpenMap Unifier - Startup Script
+echo     OpenMap Unifier - GUI Application
 echo ===================================================
 echo.
-echo [INFO] Checking for libraries folder...
-if exist "libraries" (
-    echo [INFO] Found offline libraries.
-) else (
-    echo [INFO] No offline libraries found. Will attempt online install.
-)
 
-echo.
-echo [STEP 1/2] Installing Dependencies...
-echo.
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
 
-:: Try installing from cached folder first
-if exist "libraries" (
-    echo [INFO] Installing from local 'libraries' folder...
-    pip install --no-index --find-links=libraries customtkinter packaging requests shapely pyproj
-    if %errorlevel% neq 0 (
-        echo [WARNING] Local install had issues. Attempting standard install...
-        pip install customtkinter packaging requests shapely pyproj
-    )
-) else (
-    echo [INFO] Downloading and installing from PyPI...
-    pip install customtkinter packaging requests shapely pyproj
-)
-
-if %errorlevel% neq 0 (
+:: Check if venv exists
+if not exist "venv\Scripts\python.exe" (
+    echo [INFO] Virtual environment not found. Running setup...
     echo.
-    echo [ERROR] Failed to install dependencies.
-    echo Please check your internet connection or Python installation.
-    pause
-    exit /b
+    call setup.bat
+    if %errorlevel% neq 0 (
+        echo [ERROR] Setup failed. Cannot continue.
+        pause
+        exit /b 1
+    )
 )
-echo [SUCCESS] Dependencies checked.
 
-echo.
-echo [STEP 2/2] Launching Application...
-echo.
+:: Activate and run
+call venv\Scripts\activate.bat
 
+echo [INFO] Starting OpenMap Unifier...
 python gui.py
 
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Application crashed or closed unexpectedly.
+    echo [INFO] Check the console output above for details.
     pause
 )
+
+call venv\Scripts\deactivate.bat 2>nul

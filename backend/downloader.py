@@ -180,3 +180,58 @@ class MapDownloader:
         except Exception as e:
             print(f"[ERROR] generating tiles: {e}")
             return []
+
+    def generate_1km_grid_files(self, polygon_wkt, dataset="dgm1"):
+        """
+        Generates URLs for raw data tiles (1km x 1km) based on the standard OpenData naming convention.
+        Grid aligned to 1000m steps in EPSG:25832.
+        Nomenclature often: 32<East_km>_<North_km> (e.g., 32672_5424)
+        """
+        try:
+            if ";" in polygon_wkt:
+                polygon_wkt = polygon_wkt.split(";", 1)[1]
+            
+            poly = loads(polygon_wkt)
+            transformer = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
+            projected_poly = Polygon([transformer.transform(x, y) for x, y in poly.exterior.coords])
+            
+            minx, miny, maxx, maxy = projected_poly.bounds
+            grid_res = 1000
+            start_x = math.floor(minx / grid_res) * grid_res
+            start_y = math.floor(miny / grid_res) * grid_res
+            end_x = math.ceil(maxx / grid_res) * grid_res
+            end_y = math.ceil(maxy / grid_res) * grid_res
+            
+            files = []
+            
+            # Base URLs (Best Guess/Standard)
+            base_urls = {
+                "dgm1": ("https://download1.bayernwolke.de/a/dgm1/data", ".xyz"), # Default to XYZ or TIF?
+                "lod2": ("https://download1.bayernwolke.de/a/lod2/data", ".zip"),
+                "laser": ("https://download1.bayernwolke.de/a/laser/data", ".laz")
+            }
+
+            base_url, ext = base_urls.get(dataset, ("", ""))
+            if dataset == "dgm1": ext = ".tif" # Override to TIF for DGM1 usually
+            
+            for x in range(start_x, end_x, grid_res):
+                for y in range(start_y, end_y, grid_res):
+                    tile_box = box(x, y, x + grid_res, y + grid_res)
+                    if projected_poly.intersects(tile_box):
+                        # Naming Scheme: 32 + (x/1000 defined as 3 digits) + (y/1000 defined as 4 digits)
+                        # Example X=672000 -> 672. Y=5424000 -> 5424.
+                        # Combined: 32672_5424
+                        
+                        east_km = int(x / 1000)
+                        north_km = int(y / 1000)
+                        
+                        tile_id = f"32{east_km}_{north_km}"
+                        
+                        file_name = f"{tile_id}{ext}"
+                        url = f"{base_url}/{file_name}"
+                        files.append((file_name, url))
+                        
+            return files
+        except Exception as e:
+            print(f"[ERROR] generating raw grid: {e}")
+            return []
