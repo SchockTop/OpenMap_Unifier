@@ -11,6 +11,15 @@ import time
 from backend.geometry import PolygonExtractor
 from backend.downloader import MapDownloader
 
+# Import proxy manager (optional)
+try:
+    from backend.proxy_manager import ProxyManager, get_proxy_manager
+    PROXY_AVAILABLE = True
+except ImportError:
+    PROXY_AVAILABLE = False
+    ProxyManager = None
+    get_proxy_manager = None
+
 # Set Theme
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
@@ -45,7 +54,15 @@ class OpenMapUnifierApp(ctk.CTk):
         self.title("OpenMap Unifier")
         self.geometry("1100x800")
         
-        self.downloader = MapDownloader()
+        # Initialize proxy manager
+        self.proxy_manager = None
+        if PROXY_AVAILABLE:
+            self.proxy_manager = get_proxy_manager(config_dir=".")
+            # Auto-detect proxy on startup
+            self.proxy_manager.auto_detect()
+        
+        # Create downloader with proxy support
+        self.downloader = MapDownloader(proxy_manager=self.proxy_manager)
         
         # --- Tab View ---
         self.tabview = ctk.CTkTabview(self)
@@ -142,6 +159,24 @@ class OpenMapUnifierApp(ctk.CTk):
         frame_meta.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(frame_meta, text="Mass Data (.meta4)", font=("Roboto", 14, "bold")).pack(pady=5)
         ctk.CTkButton(frame_meta, text="Select & Download .meta4", command=self.load_metalink).pack(pady=10)
+
+        # --- Proxy Settings Section ---
+        frame_proxy = ctk.CTkFrame(frame_right, fg_color="gray20")
+        frame_proxy.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(frame_proxy, text="Network / Proxy", font=("Roboto", 14, "bold")).pack(pady=5)
+        
+        proxy_row = ctk.CTkFrame(frame_proxy, fg_color="transparent")
+        proxy_row.pack(pady=5, fill="x", padx=5)
+        
+        # Proxy status indicator
+        self.lbl_proxy_status = ctk.CTkLabel(proxy_row, text="⬤ Direct Connection", font=("Roboto", 11), text_color="gray60")
+        self.lbl_proxy_status.pack(side="left", padx=5)
+        
+        btn_proxy = ctk.CTkButton(proxy_row, text="Proxy Settings", command=self.open_proxy_settings, fg_color="#555", hover_color="#666", width=120)
+        btn_proxy.pack(side="right", padx=5)
+        
+        # Update proxy status display
+        self.update_proxy_status()
 
         # --- Bottom Panel: Download Manager ---
         frame_bottom = ctk.CTkFrame(self.tab_tools)
@@ -388,6 +423,246 @@ class OpenMapUnifierApp(ctk.CTk):
             ]
             concurrent.futures.wait(futures)
         print("[INFO] Batch download finished.")
+
+    # =========================================================================
+    # Proxy Settings
+    # =========================================================================
+    
+    def update_proxy_status(self):
+        """Update the proxy status indicator in the UI."""
+        if not PROXY_AVAILABLE or not self.proxy_manager:
+            self.lbl_proxy_status.configure(text="⬤ Proxy Module Not Available", text_color="gray50")
+            return
+        
+        status = self.proxy_manager.get_status()
+        if status["enabled"]:
+            proxy_url = status["proxy_url"]
+            # Truncate long URLs
+            if len(proxy_url) > 40:
+                proxy_url = proxy_url[:37] + "..."
+            auth_info = f" ({status['auth_type']})" if status["auth_type"] != "none" else ""
+            self.lbl_proxy_status.configure(text=f"⬤ {proxy_url}{auth_info}", text_color="#27ae60")
+        else:
+            self.lbl_proxy_status.configure(text="⬤ Direct Connection", text_color="gray60")
+    
+    def open_proxy_settings(self):
+        """Open the proxy settings dialog."""
+        if not PROXY_AVAILABLE:
+            messagebox.showwarning("Not Available", "Proxy module is not available.\nCheck if backend/proxy_manager.py exists.")
+            return
+        
+        dialog = ProxySettingsDialog(self, self.proxy_manager)
+        self.wait_window(dialog)
+        
+        # Update status and reinitialize downloader with new settings
+        self.update_proxy_status()
+        self.downloader.proxy_manager = self.proxy_manager
+        self.downloader._session = None  # Force new session
+
+
+class ProxySettingsDialog(ctk.CTkToplevel):
+    """Dialog for configuring proxy settings."""
+    
+    def __init__(self, parent, proxy_manager):
+        super().__init__(parent)
+        
+        self.proxy_manager = proxy_manager
+        self.title("Proxy Settings")
+        self.geometry("500x450")
+        self.resizable(False, False)
+        
+        # Make modal
+        self.transient(parent)
+        self.grab_set()
+        
+        self.setup_ui()
+        self.load_current_settings()
+    
+    def setup_ui(self):
+        # Main container
+        container = ctk.CTkFrame(self)
+        container.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title
+        ctk.CTkLabel(container, text="Proxy Configuration", font=("Roboto", 18, "bold")).pack(pady=(0, 15))
+        
+        # --- Mode Selection ---
+        mode_frame = ctk.CTkFrame(container, fg_color="transparent")
+        mode_frame.pack(fill="x", pady=5)
+        
+        self.var_mode = ctk.StringVar(value="auto")
+        ctk.CTkRadioButton(mode_frame, text="Auto-Detect", variable=self.var_mode, value="auto", command=self.on_mode_change).pack(side="left", padx=10)
+        ctk.CTkRadioButton(mode_frame, text="Manual", variable=self.var_mode, value="manual", command=self.on_mode_change).pack(side="left", padx=10)
+        ctk.CTkRadioButton(mode_frame, text="No Proxy", variable=self.var_mode, value="none", command=self.on_mode_change).pack(side="left", padx=10)
+        
+        # --- Manual Settings Frame ---
+        self.manual_frame = ctk.CTkFrame(container, fg_color="gray20")
+        self.manual_frame.pack(fill="x", pady=10, padx=5)
+        
+        # Proxy URL
+        ctk.CTkLabel(self.manual_frame, text="Proxy URL:", anchor="w").pack(fill="x", padx=10, pady=(10, 0))
+        self.entry_proxy_url = ctk.CTkEntry(self.manual_frame, placeholder_text="http://proxy.company.com:8080")
+        self.entry_proxy_url.pack(fill="x", padx=10, pady=5)
+        
+        # Authentication Type
+        ctk.CTkLabel(self.manual_frame, text="Authentication:", anchor="w").pack(fill="x", padx=10, pady=(10, 0))
+        self.seg_auth = ctk.CTkSegmentedButton(self.manual_frame, values=["None", "Basic", "NTLM"])
+        self.seg_auth.set("None")
+        self.seg_auth.pack(fill="x", padx=10, pady=5)
+        self.seg_auth.configure(command=self.on_auth_change)
+        
+        # Credentials Frame
+        self.creds_frame = ctk.CTkFrame(self.manual_frame, fg_color="transparent")
+        self.creds_frame.pack(fill="x", padx=10, pady=5)
+        
+        # Domain (for NTLM)
+        self.lbl_domain = ctk.CTkLabel(self.creds_frame, text="Domain:")
+        self.entry_domain = ctk.CTkEntry(self.creds_frame, placeholder_text="COMPANY", width=150)
+        
+        # Username
+        ctk.CTkLabel(self.creds_frame, text="Username:").grid(row=0, column=0, sticky="w", pady=2)
+        self.entry_username = ctk.CTkEntry(self.creds_frame, placeholder_text="username")
+        self.entry_username.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
+        
+        # Password
+        ctk.CTkLabel(self.creds_frame, text="Password:").grid(row=1, column=0, sticky="w", pady=2)
+        self.entry_password = ctk.CTkEntry(self.creds_frame, placeholder_text="password", show="*")
+        self.entry_password.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
+        
+        self.creds_frame.grid_columnconfigure(1, weight=1)
+        
+        # --- Status / Info ---
+        self.lbl_status = ctk.CTkLabel(container, text="", font=("Roboto", 11), text_color="gray60")
+        self.lbl_status.pack(pady=10)
+        
+        # --- Buttons ---
+        btn_frame = ctk.CTkFrame(container, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=10)
+        
+        ctk.CTkButton(btn_frame, text="Auto-Detect Now", command=self.do_auto_detect, fg_color="#555", width=130).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="Test Connection", command=self.do_test_connection, fg_color="#3498db", width=130).pack(side="left", padx=5)
+        
+        btn_frame2 = ctk.CTkFrame(container, fg_color="transparent")
+        btn_frame2.pack(fill="x", pady=5)
+        
+        ctk.CTkButton(btn_frame2, text="Save & Close", command=self.do_save, fg_color="#27ae60", width=150).pack(side="right", padx=5)
+        ctk.CTkButton(btn_frame2, text="Cancel", command=self.destroy, fg_color="#555", width=100).pack(side="right", padx=5)
+        
+        # Initial state
+        self.on_mode_change()
+        self.on_auth_change("None")
+    
+    def load_current_settings(self):
+        """Load current proxy settings into the form."""
+        config = self.proxy_manager.config
+        
+        if not config.enabled:
+            self.var_mode.set("none")
+        elif config.auto_detect:
+            self.var_mode.set("auto")
+        else:
+            self.var_mode.set("manual")
+        
+        self.entry_proxy_url.delete(0, "end")
+        self.entry_proxy_url.insert(0, config.proxy_url)
+        
+        auth_map = {"none": "None", "basic": "Basic", "ntlm": "NTLM"}
+        self.seg_auth.set(auth_map.get(config.auth_type, "None"))
+        
+        self.entry_username.delete(0, "end")
+        self.entry_username.insert(0, config.username)
+        
+        self.entry_domain.delete(0, "end")
+        self.entry_domain.insert(0, config.domain)
+        
+        self.on_mode_change()
+        self.on_auth_change(self.seg_auth.get())
+    
+    def on_mode_change(self):
+        """Handle mode radio button change."""
+        mode = self.var_mode.get()
+        if mode == "manual":
+            for child in self.manual_frame.winfo_children():
+                try:
+                    child.configure(state="normal")
+                except:
+                    pass
+        else:
+            # Disable manual inputs for auto/none modes
+            pass  # Keep enabled for visibility but will be ignored
+    
+    def on_auth_change(self, value):
+        """Handle auth type change."""
+        if value == "NTLM":
+            self.lbl_domain.grid(row=2, column=0, sticky="w", pady=2)
+            self.entry_domain.grid(row=2, column=1, sticky="ew", padx=5, pady=2)
+        else:
+            self.lbl_domain.grid_forget()
+            self.entry_domain.grid_forget()
+        
+        if value == "None":
+            self.entry_username.configure(state="disabled")
+            self.entry_password.configure(state="disabled")
+        else:
+            self.entry_username.configure(state="normal")
+            self.entry_password.configure(state="normal")
+    
+    def do_auto_detect(self):
+        """Run auto-detection."""
+        self.lbl_status.configure(text="Detecting proxy settings...", text_color="yellow")
+        self.update()
+        
+        found = self.proxy_manager.auto_detect()
+        
+        if found:
+            self.entry_proxy_url.delete(0, "end")
+            self.entry_proxy_url.insert(0, self.proxy_manager.config.proxy_url)
+            self.lbl_status.configure(text=f"✓ Detected: {self.proxy_manager.config.proxy_url}", text_color="#27ae60")
+            self.var_mode.set("auto")
+        else:
+            self.lbl_status.configure(text="No proxy detected. Using direct connection.", text_color="gray60")
+            self.var_mode.set("none")
+    
+    def do_test_connection(self):
+        """Test the current connection."""
+        self.lbl_status.configure(text="Testing connection...", text_color="yellow")
+        self.update()
+        
+        # Apply current form settings temporarily
+        self.apply_settings(save=False)
+        
+        success, message = self.proxy_manager.test_connection()
+        
+        if success:
+            self.lbl_status.configure(text=f"✓ {message}", text_color="#27ae60")
+        else:
+            self.lbl_status.configure(text=f"✗ {message}", text_color="#e74c3c")
+    
+    def apply_settings(self, save=True):
+        """Apply form settings to proxy manager."""
+        mode = self.var_mode.get()
+        
+        if mode == "none":
+            self.proxy_manager.disable_proxy()
+        elif mode == "auto":
+            self.proxy_manager.auto_detect()
+        else:  # manual
+            auth_map = {"None": "none", "Basic": "basic", "NTLM": "ntlm"}
+            self.proxy_manager.set_manual_proxy(
+                proxy_url=self.entry_proxy_url.get(),
+                auth_type=auth_map.get(self.seg_auth.get(), "none"),
+                username=self.entry_username.get(),
+                password=self.entry_password.get(),
+                domain=self.entry_domain.get()
+            )
+        
+        if save:
+            self.proxy_manager.save_config()
+    
+    def do_save(self):
+        """Save settings and close."""
+        self.apply_settings(save=True)
+        self.destroy()
 
 if __name__ == "__main__":
     app = OpenMapUnifierApp()

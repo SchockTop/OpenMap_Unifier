@@ -10,8 +10,21 @@ from pyproj import Transformer
 import threading
 import time
 
+# Import proxy manager (optional - falls back to direct connection)
+try:
+    from backend.proxy_manager import ProxyManager, get_proxy_manager
+    PROXY_AVAILABLE = True
+except ImportError:
+    try:
+        from proxy_manager import ProxyManager, get_proxy_manager
+        PROXY_AVAILABLE = True
+    except ImportError:
+        PROXY_AVAILABLE = False
+        ProxyManager = None
+        get_proxy_manager = None
+
 class MapDownloader:
-    def __init__(self, download_dir="downloads"):
+    def __init__(self, download_dir="downloads", proxy_manager=None):
         self.download_dir = download_dir
         if not os.path.exists(download_dir):
             try:
@@ -19,6 +32,10 @@ class MapDownloader:
             except:
                 pass 
         self.stop_event = False
+        
+        # Proxy support
+        self.proxy_manager = proxy_manager
+        self._session = None
 
     def format_bytes(self, size):
         power = 2**10
@@ -55,9 +72,14 @@ class MapDownloader:
 
         start_time = time.time()
         try:
-            # Use User-Agent for all requests
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            response = requests.get(url, stream=True, timeout=15, headers=headers)
+            # Get session with proxy config if available
+            if self.proxy_manager:
+                session = self.proxy_manager.get_session()
+                response = session.get(url, stream=True, timeout=30)
+            else:
+                # Fallback to direct request
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+                response = requests.get(url, stream=True, timeout=30, headers=headers)
             response.raise_for_status()
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0

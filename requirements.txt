@@ -8,3 +8,7 @@ shapely>=2.1.0
 pyproj>=3.7.0
 tqdm>=4.66.0
 packaging>=23.0
+
+# Optional: NTLM authentication for corporate proxies
+# Uncomment if needed in your environment
+# requests-ntlm>=1.2.0
