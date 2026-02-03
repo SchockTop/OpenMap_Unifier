@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 
 echo ===================================================
 echo     OpenMap Unifier - OFFLINE Mode
@@ -20,9 +20,9 @@ if not exist "libraries" (
 :: Check if venv exists
 if not exist "venv\Scripts\python.exe" (
     echo [INFO] Virtual environment not found.
-    echo [INFO] Running setup (will use offline libraries)...
+    echo [INFO] Running setup, will use offline libraries...
     call setup.bat
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo [ERROR] Setup failed.
         pause
         exit /b 1

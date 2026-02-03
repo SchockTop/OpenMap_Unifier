@@ -120,7 +120,7 @@ class MapDownloader:
             print(f"[ERROR] Metalink parse error: {e}")
             return []
 
-    def generate_relief_tiles(self, polygon_wkt, layer="by_relief_schraeglicht"):
+    def generate_relief_tiles(self, polygon_wkt, layer="by_relief_schraeglicht", format_ext="jpg", high_res=False):
         try:
             if ";" in polygon_wkt:
                 polygon_wkt = polygon_wkt.split(";", 1)[1]
@@ -166,13 +166,25 @@ class MapDownloader:
 
                         file_name = f"{layer}_{int(x)}_{int(y)}.{ext}"
                         
+                        # Set resolution based on high_res flag
+                        if high_res:
+                            # High-res mode: 300 DPI, ~5906px for 1km at 300 DPI
+                            width = 5906
+                            height = 5906
+                            dpi_params = "&DPI=300&MAP_RESOLUTION=300&FORMAT_OPTIONS=dpi:300"
+                        else:
+                            # Standard mode: lower resolution for faster downloads
+                            width = 2000
+                            height = 2000
+                            dpi_params = ""
+                        
                         url = (
                             f"{base_url}?"
                             f"service=wms&version=1.1.1&request=GetMap"
                             f"&format={mime}&transparent=true"
                             f"&layers={layer}"
                             f"&srs=EPSG:25832&STYLES="
-                            f"&WIDTH=2000&HEIGHT=2000" 
+                            f"&WIDTH={width}&HEIGHT={height}{dpi_params}"
                             f"&BBOX={int(x)},{int(y)},{int(x+grid_res)},{int(y+grid_res)}"
                         )
                         tiles.append((file_name, url))
@@ -206,13 +218,15 @@ class MapDownloader:
             
             # Base URLs (Best Guess/Standard)
             base_urls = {
-                "dgm1": ("https://download1.bayernwolke.de/a/dgm1/data", ".xyz"), # Default to XYZ or TIF?
+                "dgm1": ("https://download1.bayernwolke.de/a/dgm1/data", ".tif"),
+                "dop20": ("https://download1.bayernwolke.de/a/dop20/data", ".tif"),
+                "dop40": ("https://download1.bayernwolke.de/a/dop40/data", ".tif"),
                 "lod2": ("https://download1.bayernwolke.de/a/lod2/data", ".zip"),
                 "laser": ("https://download1.bayernwolke.de/a/laser/data", ".laz")
             }
 
             base_url, ext = base_urls.get(dataset, ("", ""))
-            if dataset == "dgm1": ext = ".tif" # Override to TIF for DGM1 usually
+            # DGM1 is typically .tif (already set above)
             
             for x in range(start_x, end_x, grid_res):
                 for y in range(start_y, end_y, grid_res):

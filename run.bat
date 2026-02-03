@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
 echo ===================================================
 echo     OpenMap Unifier - GUI Application
@@ -14,7 +14,7 @@ if not exist "venv\Scripts\python.exe" (
     echo [INFO] Virtual environment not found. Running setup...
     echo.
     call setup.bat
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo [ERROR] Setup failed. Cannot continue.
         pause
         exit /b 1

@@ -99,23 +99,45 @@ class OpenMapUnifierApp(ctk.CTk):
         
         ctk.CTkLabel(frame_right, text="2. Data Downloader", font=("Roboto", 18, "bold")).pack(pady=10)
         
-        # Height Data
-        frame_relief = ctk.CTkFrame(frame_right, fg_color="gray20")
-        frame_relief.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(frame_relief, text="Height Data & Satellite (Polygon)", font=("Roboto", 14, "bold")).pack(pady=5)
+        # --- Height Data Section ---
+        frame_height = ctk.CTkFrame(frame_right, fg_color="gray20")
+        frame_height.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(frame_height, text="Height Data (Relief)", font=("Roboto", 14, "bold")).pack(pady=5)
         
-        # Satellite Controls
-        frame_sat = ctk.CTkFrame(frame_relief, fg_color="transparent")
-        frame_sat.pack(pady=5, fill="x")
+        height_controls = ctk.CTkFrame(frame_height, fg_color="transparent")
+        height_controls.pack(pady=5, fill="x", padx=5)
         
-        btn_sat = ctk.CTkButton(frame_sat, text="Start Satellite (DOP40)", command=self.start_satellite_download, fg_color="#27ae60", hover_color="#2ecc71")
-        btn_sat.pack(side="left", padx=5)
+        btn_relief = ctk.CTkButton(height_controls, text="Download Relief", command=self.start_relief_download, fg_color="#8e44ad", hover_color="#9b59b6")
+        btn_relief.pack(side="left", padx=5)
         
-        self.seg_format = ctk.CTkSegmentedButton(frame_sat, values=["JPG", "TIF"])
+        self.chk_high_res_relief = ctk.CTkCheckBox(height_controls, text="High-Res (300 DPI)")
+        self.chk_high_res_relief.pack(side="left", padx=10)
+        
+        # --- Satellite Data Section ---
+        frame_sat = ctk.CTkFrame(frame_right, fg_color="gray20")
+        frame_sat.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(frame_sat, text="Satellite Imagery", font=("Roboto", 14, "bold")).pack(pady=5)
+        
+        # DOP20 (Raw Files - Higher Quality)
+        sat_row1 = ctk.CTkFrame(frame_sat, fg_color="transparent")
+        sat_row1.pack(pady=3, fill="x", padx=5)
+        
+        btn_dop20 = ctk.CTkButton(sat_row1, text="Download DOP20 (Raw TIF)", command=self.start_dop20_download, fg_color="#27ae60", hover_color="#2ecc71")
+        btn_dop20.pack(side="left", padx=5)
+        ctk.CTkLabel(sat_row1, text="20cm/px, best quality", font=("Roboto", 11), text_color="gray60").pack(side="left", padx=5)
+        
+        # DOP40 (WMS Tiles)
+        sat_row2 = ctk.CTkFrame(frame_sat, fg_color="transparent")
+        sat_row2.pack(pady=3, fill="x", padx=5)
+        
+        btn_dop40 = ctk.CTkButton(sat_row2, text="Download DOP40 (WMS)", command=self.start_satellite_download, fg_color="#3498db", hover_color="#2980b9")
+        btn_dop40.pack(side="left", padx=5)
+        
+        self.seg_format = ctk.CTkSegmentedButton(sat_row2, values=["JPG", "TIF"])
         self.seg_format.set("JPG")
         self.seg_format.pack(side="left", padx=5)
         
-        # Mass Data
+        # --- Mass Data Section ---
         frame_meta = ctk.CTkFrame(frame_right, fg_color="gray20")
         frame_meta.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(frame_meta, text="Mass Data (.meta4)", font=("Roboto", 14, "bold")).pack(pady=5)
@@ -233,13 +255,15 @@ class OpenMapUnifierApp(ctk.CTk):
             messagebox.showwarning("Warning", "Please extract a polygon first.")
             return
 
-        print("[INFO] Starting Relief Download...")
+        high_res = self.chk_high_res_relief.get() == 1
+        res_label = "High-Res 300 DPI" if high_res else "Standard"
+        print(f"[INFO] Starting Relief Download ({res_label})...")
         self.downloader.download_dir = "downloads_relief"
         if not os.path.exists("downloads_relief"):
             os.makedirs("downloads_relief")
             
-        self.add_download_row("Relief", "Generating tiles...", 0, "Calculating", "...")
-        threading.Thread(target=self.run_relief_gen, args=(poly, "relief"), daemon=True).start()
+        self.add_download_row("Relief", f"Generating {res_label} tiles...", 0, "Calculating", "...")
+        threading.Thread(target=self.run_relief_gen, args=(poly, "relief", "tiff", high_res), daemon=True).start()
 
     def start_satellite_download(self):
         poly = self.text_polygon.get("1.0", "end").strip()
@@ -248,23 +272,54 @@ class OpenMapUnifierApp(ctk.CTk):
             return
 
         fmt = self.seg_format.get().lower()
-        print(f"[INFO] Starting Satellite (DOP40) Download... Format: {fmt}")
+        print(f"[INFO] Starting Satellite (DOP40 WMS) Download... Format: {fmt}")
         
-        # Unique dir for TIFs if you want, or shared? Let's use same but maybe user wants separation?
-        # Keeping simple for now, same dir.
         self.downloader.download_dir = "downloads_satellite"
         if not os.path.exists("downloads_satellite"):
             os.makedirs("downloads_satellite")
             
-        self.add_download_row("Satellite", f"Generating DOP40 ({fmt}) tiles...", 0, "Calculating", "...")
-        threading.Thread(target=self.run_relief_gen, args=(poly, "dop40", fmt), daemon=True).start()
+        self.add_download_row("DOP40", f"Generating DOP40 ({fmt}) tiles...", 0, "Calculating", "...")
+        threading.Thread(target=self.run_relief_gen, args=(poly, "dop40", fmt, False), daemon=True).start()
 
-    def run_relief_gen(self, poly, type_key, format_ext="jpg"):
-        print(f"[INFO] Generating {type_key} tiles for polygon (Format: {format_ext})...")
+    def start_dop20_download(self):
+        """Download raw DOP20 satellite imagery files (highest quality)."""
+        poly = self.text_polygon.get("1.0", "end").strip()
+        if not poly:
+            messagebox.showwarning("Warning", "Please extract a polygon first.")
+            return
+
+        print("[INFO] Starting DOP20 (Raw TIF) Download...")
+        
+        self.downloader.download_dir = "downloads_dop20"
+        if not os.path.exists("downloads_dop20"):
+            os.makedirs("downloads_dop20")
+            
+        self.add_download_row("DOP20", "Generating file list...", 0, "Calculating", "...")
+        threading.Thread(target=self.run_raw_download, args=(poly, "dop20"), daemon=True).start()
+
+    def run_raw_download(self, poly, dataset):
+        """Handler for raw file downloads (DOP20, DGM1, etc.)."""
+        print(f"[INFO] Generating {dataset.upper()} file list for polygon...")
+        
+        files = self.downloader.generate_1km_grid_files(poly, dataset=dataset)
+        if files:
+            print(f"[INFO] Generated {len(files)} files to download.")
+            
+            for fname, url in files:
+                self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
+                
+            self.add_download_row(dataset.upper(), f"Queued {len(files)} files.", 100, "Ready", "")
+            self.run_downloads_batch(files)
+        else:
+            print("[WARN] No files generated for polygon.")
+            self.add_download_row(dataset.upper(), "No intersecting files found.", 0, "Error", "")
+
+    def run_relief_gen(self, poly, type_key, format_ext="jpg", high_res=False):
+        print(f"[INFO] Generating {type_key} tiles for polygon (Format: {format_ext}, High-Res: {high_res})...")
         # 'dop40' or 'relief' - logic is handled in downloader now
         layer = "by_relief_schraeglicht" if type_key == "relief" else "dop40"
         
-        tiles = self.downloader.generate_relief_tiles(poly, layer=layer, format_ext=format_ext)
+        tiles = self.downloader.generate_relief_tiles(poly, layer=layer, format_ext=format_ext, high_res=high_res)
         if tiles:
              print(f"[INFO] Generated {len(tiles)} tiles.")
              
