@@ -10,6 +10,7 @@ import time
 
 from backend.geometry import PolygonExtractor
 from backend.downloader import MapDownloader
+from backend.osm_downloader import OSMDownloader, LAYER_ORDER, DEFAULT_LAYERS, LAYERS as OSM_LAYERS
 
 # Import proxy manager (optional)
 try:
@@ -63,16 +64,19 @@ class OpenMapUnifierApp(ctk.CTk):
         
         # Create downloader with proxy support
         self.downloader = MapDownloader(proxy_manager=self.proxy_manager)
+        self.osm_downloader = OSMDownloader(proxy_manager=self.proxy_manager)
         
         # --- Tab View ---
         self.tabview = ctk.CTkTabview(self)
         self.tabview.pack(fill="both", expand=True, padx=20, pady=20)
         
         self.tab_tools = self.tabview.add("Map Tools")
+        self.tab_osm = self.tabview.add("OSM Data")
         self.tab_help = self.tabview.add("Help & Guide")
         self.tab_console = self.tabview.add("Console")
-        
+
         self.setup_tools_tab()
+        self.setup_osm_tab()
         self.setup_help_tab()
         self.setup_console_tab()
 
@@ -458,6 +462,260 @@ class OpenMapUnifierApp(ctk.CTk):
         self.update_proxy_status()
         self.downloader.proxy_manager = self.proxy_manager
         self.downloader._session = None  # Force new session
+
+
+    # =========================================================================
+    # OSM Data Tab
+    # =========================================================================
+
+    def setup_osm_tab(self):
+        self.tab_osm.grid_columnconfigure(0, weight=1)
+        self.tab_osm.grid_columnconfigure(1, weight=1)
+        self.tab_osm.grid_rowconfigure(0, weight=0)
+        self.tab_osm.grid_rowconfigure(1, weight=1)
+
+        # ── Left panel: area / buffer / actions ───────────────────────────
+        frame_left = ctk.CTkFrame(self.tab_osm)
+        frame_left.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        ctk.CTkLabel(frame_left, text="Area & Settings",
+                     font=("Roboto", 18, "bold")).pack(pady=10)
+
+        # Polygon preview (read-only)
+        ctk.CTkLabel(frame_left, text="Active polygon (from Map Tools tab):",
+                     anchor="w", font=("Roboto", 12), text_color="gray60").pack(
+            fill="x", padx=10)
+        self.osm_poly_preview = ctk.CTkTextbox(frame_left, height=55, state="disabled",
+                                                text_color="gray50")
+        self.osm_poly_preview.pack(fill="x", padx=10, pady=(0, 8))
+
+        # Refresh polygon button
+        ctk.CTkButton(frame_left, text="Refresh Polygon from Map Tools",
+                      command=self._osm_refresh_polygon,
+                      fg_color="transparent", border_width=1, height=28).pack(
+            padx=10, pady=(0, 8))
+
+        # Area estimate
+        self.lbl_osm_area = ctk.CTkLabel(frame_left, text="Area estimate: —",
+                                          font=("Roboto", 12), text_color="gray60")
+        self.lbl_osm_area.pack(anchor="w", padx=10)
+
+        # Expand / buffer
+        frame_buf = ctk.CTkFrame(frame_left, fg_color="gray20")
+        frame_buf.pack(fill="x", padx=10, pady=8)
+        ctk.CTkLabel(frame_buf, text="Expand area beyond polygon boundary:",
+                     font=("Roboto", 13, "bold")).pack(anchor="w", padx=8, pady=(8, 2))
+
+        buf_entry_row = ctk.CTkFrame(frame_buf, fg_color="transparent")
+        buf_entry_row.pack(fill="x", padx=8, pady=4)
+
+        self.osm_buffer_var = tk.StringVar(value="0")
+        self.osm_buffer_var.trace_add("write", lambda *_: self._osm_update_area())
+
+        self.osm_buf_entry = ctk.CTkEntry(buf_entry_row, textvariable=self.osm_buffer_var,
+                                           width=70)
+        self.osm_buf_entry.pack(side="left")
+        ctk.CTkLabel(buf_entry_row, text="meters", text_color="gray60").pack(
+            side="left", padx=6)
+
+        # Preset buttons
+        preset_row = ctk.CTkFrame(frame_buf, fg_color="transparent")
+        preset_row.pack(fill="x", padx=8, pady=(0, 8))
+        for label, val in [("0 m", "0"), ("250 m", "250"), ("500 m", "500"),
+                            ("1 km", "1000"), ("5 km", "5000")]:
+            ctk.CTkButton(preset_row, text=label, width=52, height=26,
+                          fg_color="gray30", hover_color="gray40",
+                          command=lambda v=val: self.osm_buffer_var.set(v)).pack(
+                side="left", padx=2)
+
+        # Output directory
+        frame_out = ctk.CTkFrame(frame_left, fg_color="gray20")
+        frame_out.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkLabel(frame_out, text="Output directory:",
+                     font=("Roboto", 13, "bold")).pack(anchor="w", padx=8, pady=(8, 2))
+        out_row = ctk.CTkFrame(frame_out, fg_color="transparent")
+        out_row.pack(fill="x", padx=8, pady=(0, 8))
+        self.osm_dir_var = tk.StringVar(value="downloads_osm")
+        ctk.CTkEntry(out_row, textvariable=self.osm_dir_var).pack(
+            side="left", fill="x", expand=True)
+        ctk.CTkButton(out_row, text="...", width=30, height=28,
+                      command=self._osm_browse_dir,
+                      fg_color="gray30", hover_color="gray40").pack(side="left", padx=4)
+
+        # Download button
+        ctk.CTkButton(frame_left, text="Download Selected Layers",
+                      command=self.start_osm_download,
+                      fg_color="#1e8bc3", hover_color="#3498db",
+                      height=40, font=("Roboto", 14, "bold")).pack(
+            fill="x", padx=10, pady=8)
+
+        ctk.CTkLabel(frame_left,
+                     text="Output: GeoJSON per layer — compatible with QGIS, OSG, Terrain3D",
+                     font=("Roboto", 11), text_color="gray50").pack(padx=10, pady=(0, 4))
+
+        # ── Right panel: layer selection ───────────────────────────────────
+        frame_right = ctk.CTkFrame(self.tab_osm)
+        frame_right.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+
+        ctk.CTkLabel(frame_right, text="Select Layers",
+                     font=("Roboto", 18, "bold")).pack(pady=10)
+
+        layers_scroll = ctk.CTkScrollableFrame(frame_right)
+        layers_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+        self.osm_layer_vars = {}
+        for layer_name in LAYER_ORDER:
+            info = OSM_LAYERS[layer_name]
+            is_default = layer_name in DEFAULT_LAYERS
+
+            row = ctk.CTkFrame(layers_scroll, fg_color="gray20")
+            row.pack(fill="x", padx=4, pady=3)
+            row.grid_columnconfigure(1, weight=1)
+
+            var = tk.BooleanVar(value=is_default)
+            self.osm_layer_vars[layer_name] = var
+
+            chk = ctk.CTkCheckBox(row, text="", variable=var, width=24,
+                                  fg_color=info["fg_color"], hover_color=info["fg_color"])
+            chk.grid(row=0, column=0, padx=(8, 4), pady=6)
+
+            ctk.CTkLabel(row, text=layer_name,
+                         font=("Roboto", 13, "bold"), anchor="w").grid(
+                row=0, column=1, sticky="w")
+            ctk.CTkLabel(row, text=info["description"],
+                         font=("Roboto", 11), text_color="gray60", anchor="w").grid(
+                row=1, column=1, sticky="w", padx=2, pady=(0, 4))
+
+        # Select / deselect all
+        btn_row = ctk.CTkFrame(frame_right, fg_color="transparent")
+        btn_row.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(btn_row, text="Select All", width=100,
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: [v.set(True) for v in self.osm_layer_vars.values()]).pack(
+            side="left", padx=4)
+        ctk.CTkButton(btn_row, text="Clear All", width=100,
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: [v.set(False) for v in self.osm_layer_vars.values()]).pack(
+            side="left", padx=4)
+
+        # ── Bottom: download progress ──────────────────────────────────────
+        frame_bottom = ctk.CTkFrame(self.tab_osm)
+        frame_bottom.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10, pady=(0, 10))
+
+        ctk.CTkLabel(frame_bottom, text="OSM Download Progress",
+                     font=("Roboto", 16, "bold")).pack(anchor="w", padx=10, pady=5)
+
+        self.osm_download_list = ctk.CTkScrollableFrame(frame_bottom)
+        self.osm_download_list.pack(fill="both", expand=True, padx=5, pady=5)
+        self.osm_download_rows = {}
+
+    def _osm_refresh_polygon(self):
+        """Copy the current polygon from Map Tools into the OSM preview."""
+        poly = self.text_polygon.get("1.0", "end").strip()
+        self.osm_poly_preview.configure(state="normal")
+        self.osm_poly_preview.delete("1.0", "end")
+        self.osm_poly_preview.insert("1.0", poly if poly else "(no polygon loaded)")
+        self.osm_poly_preview.configure(state="disabled")
+        self._osm_update_area()
+
+    def _osm_update_area(self):
+        """Recompute and display the bounding-box area estimate."""
+        poly = self.text_polygon.get("1.0", "end").strip()
+        if not poly:
+            self.lbl_osm_area.configure(text="Area estimate: — (no polygon)")
+            return
+        try:
+            buffer = int(self.osm_buffer_var.get() or "0")
+        except ValueError:
+            buffer = 0
+        try:
+            bbox = self.osm_downloader.calculate_bbox(poly, buffer)
+            area = self.osm_downloader.estimate_area_km2(bbox)
+            self.lbl_osm_area.configure(
+                text=f"Area estimate: ~{area:.1f} km²  (buffer: {buffer} m)")
+        except Exception:
+            self.lbl_osm_area.configure(text="Area estimate: invalid polygon")
+
+    def _osm_browse_dir(self):
+        path = filedialog.askdirectory(title="Select OSM output directory")
+        if path:
+            self.osm_dir_var.set(path)
+
+    def start_osm_download(self):
+        poly = self.text_polygon.get("1.0", "end").strip()
+        if not poly:
+            messagebox.showwarning("Warning", "Please extract a polygon first (Map Tools tab).")
+            return
+
+        selected = [name for name, var in self.osm_layer_vars.items() if var.get()]
+        if not selected:
+            messagebox.showwarning("Warning", "Please select at least one layer.")
+            return
+
+        try:
+            buffer = int(self.osm_buffer_var.get() or "0")
+        except ValueError:
+            buffer = 0
+
+        out_dir = self.osm_dir_var.get().strip() or "downloads_osm"
+        self.osm_downloader.download_dir = out_dir
+        self.osm_downloader.stop_event = False
+
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
+
+        # Prime progress rows
+        for name in selected:
+            self.add_osm_row(name, "Queued...", 0, "-", "-")
+
+        print(f"[OSM] Starting download of {len(selected)} layers, buffer={buffer}m, dir={out_dir}")
+        threading.Thread(
+            target=self.run_osm_downloads, args=(poly, selected, buffer), daemon=True
+        ).start()
+
+    def run_osm_downloads(self, poly, layers, buffer_meters):
+        def cb(name, pct, status, speed, eta):
+            self.after(0, lambda n=name, p=pct, s=status, sp=speed, e=eta:
+                       self.add_osm_row(n, s, p, sp, e))
+
+        results = self.osm_downloader.download_selected(poly, layers, buffer_meters, cb)
+
+        ok_count = sum(1 for ok, _ in results.values() if ok)
+        print(f"[OSM] Finished: {ok_count}/{len(results)} layers downloaded successfully.")
+
+    def add_osm_row(self, filename, status, percent, speed, eta):
+        if filename in self.osm_download_rows:
+            w = self.osm_download_rows[filename]
+            try:
+                w["status"].configure(text=status)
+                w["progress"].set(percent / 100)
+                w["metrics"].configure(text=f"{speed} | {eta}")
+            except Exception:
+                pass
+            return
+
+        row = ctk.CTkFrame(self.osm_download_list)
+        row.pack(fill="x", pady=2, padx=2)
+        row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(row, text=filename, width=160, anchor="w",
+                     font=("Roboto", 12, "bold")).grid(row=0, column=0, padx=5, pady=5)
+
+        bar = ctk.CTkProgressBar(row)
+        bar.grid(row=0, column=1, sticky="ew", padx=5)
+        bar.set(percent / 100)
+
+        lbl_status = ctk.CTkLabel(row, text=status, width=200, anchor="w",
+                                   font=("Roboto", 11))
+        lbl_status.grid(row=0, column=2, padx=5)
+
+        lbl_metrics = ctk.CTkLabel(row, text=f"{speed} | {eta}", width=120, anchor="e",
+                                    font=("Roboto", 11, "bold"))
+        lbl_metrics.grid(row=0, column=3, padx=5)
+
+        self.osm_download_rows[filename] = {
+            "frame": row, "status": lbl_status, "progress": bar, "metrics": lbl_metrics
+        }
 
 
 class ProxySettingsDialog(ctk.CTkToplevel):

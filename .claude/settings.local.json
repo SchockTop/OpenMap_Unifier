@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la *.bat)",
+      "Bash(python -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(python -c ':*)",
+      "WebSearch",
+      "Bash(rm -rf test_osm_output)"
+    ]
+  }
+}
