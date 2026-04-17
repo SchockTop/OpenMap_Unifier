@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Vendored libs / wheel cache
+libraries/
+
+# Downloads & caches
+downloads/
+downloads_*/
+*.tif
+*.tiff
+*.laz
+
+# Local configuration / secrets
+proxy_config.json
+.env
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
