@@ -8,9 +8,14 @@ import sys
 import os
 import time
 
+import subprocess
+
 from backend.geometry import PolygonExtractor
 from backend.downloader import MapDownloader
-from backend.osm_downloader import OSMDownloader, LAYER_ORDER, DEFAULT_LAYERS, LAYERS as OSM_LAYERS
+from backend.osm_downloader import (
+    OSMDownloader, LAYER_ORDER, DEFAULT_LAYERS, LAYERS as OSM_LAYERS,
+    OUTPUT_FORMATS, DEFAULT_OUTPUT_FORMAT,
+)
 
 # Import proxy manager (optional)
 try:
@@ -130,9 +135,13 @@ class OpenMapUnifierApp(ctk.CTk):
         
         btn_relief = ctk.CTkButton(height_controls, text="Download Relief", command=self.start_relief_download, fg_color="#8e44ad", hover_color="#9b59b6")
         btn_relief.pack(side="left", padx=5)
-        
+
         self.chk_high_res_relief = ctk.CTkCheckBox(height_controls, text="High-Res (300 DPI)")
         self.chk_high_res_relief.pack(side="left", padx=10)
+
+        ctk.CTkButton(height_controls, text="Open Folder", width=110, height=28,
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: self._open_folder("downloads_relief")).pack(side="right", padx=5)
         
         # --- Satellite Data Section ---
         frame_sat = ctk.CTkFrame(frame_right, fg_color="gray20")
@@ -146,6 +155,10 @@ class OpenMapUnifierApp(ctk.CTk):
         btn_dop20 = ctk.CTkButton(sat_row1, text="Download DOP20 (Raw TIF)", command=self.start_dop20_download, fg_color="#27ae60", hover_color="#2ecc71")
         btn_dop20.pack(side="left", padx=5)
         ctk.CTkLabel(sat_row1, text="20cm/px, best quality", font=("Roboto", 11), text_color="gray60").pack(side="left", padx=5)
+
+        ctk.CTkButton(sat_row1, text="Open Folder", width=110, height=28,
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: self._open_folder("downloads_dop20")).pack(side="right", padx=5)
         
         # DOP40 (WMS Tiles)
         sat_row2 = ctk.CTkFrame(frame_sat, fg_color="transparent")
@@ -153,16 +166,25 @@ class OpenMapUnifierApp(ctk.CTk):
         
         btn_dop40 = ctk.CTkButton(sat_row2, text="Download DOP40 (WMS)", command=self.start_satellite_download, fg_color="#3498db", hover_color="#2980b9")
         btn_dop40.pack(side="left", padx=5)
-        
+
         self.seg_format = ctk.CTkSegmentedButton(sat_row2, values=["JPG", "TIF"])
         self.seg_format.set("JPG")
         self.seg_format.pack(side="left", padx=5)
+
+        ctk.CTkButton(sat_row2, text="Open Folder", width=110, height=28,
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: self._open_folder("downloads_satellite")).pack(side="right", padx=5)
         
         # --- Mass Data Section ---
         frame_meta = ctk.CTkFrame(frame_right, fg_color="gray20")
         frame_meta.pack(fill="x", padx=10, pady=5)
         ctk.CTkLabel(frame_meta, text="Mass Data (.meta4)", font=("Roboto", 14, "bold")).pack(pady=5)
-        ctk.CTkButton(frame_meta, text="Select & Download .meta4", command=self.load_metalink).pack(pady=10)
+        meta_row = ctk.CTkFrame(frame_meta, fg_color="transparent")
+        meta_row.pack(pady=10, fill="x", padx=5)
+        ctk.CTkButton(meta_row, text="Select & Download .meta4", command=self.load_metalink).pack(side="left", padx=5)
+        ctk.CTkButton(meta_row, text="Open Folder", width=110, height=28,
+                      fg_color="gray30", hover_color="gray40",
+                      command=lambda: self._open_folder("downloads")).pack(side="right", padx=5)
 
         # --- Proxy Settings Section ---
         frame_proxy = ctk.CTkFrame(frame_right, fg_color="gray20")
@@ -534,24 +556,47 @@ class OpenMapUnifierApp(ctk.CTk):
         ctk.CTkLabel(frame_out, text="Output directory:",
                      font=("Roboto", 13, "bold")).pack(anchor="w", padx=8, pady=(8, 2))
         out_row = ctk.CTkFrame(frame_out, fg_color="transparent")
-        out_row.pack(fill="x", padx=8, pady=(0, 8))
+        out_row.pack(fill="x", padx=8, pady=(0, 4))
         self.osm_dir_var = tk.StringVar(value="downloads_osm")
         ctk.CTkEntry(out_row, textvariable=self.osm_dir_var).pack(
             side="left", fill="x", expand=True)
         ctk.CTkButton(out_row, text="...", width=30, height=28,
                       command=self._osm_browse_dir,
                       fg_color="gray30", hover_color="gray40").pack(side="left", padx=4)
+        ctk.CTkButton(frame_out, text="Open Output Folder",
+                      command=lambda: self._open_folder(self.osm_dir_var.get().strip() or "downloads_osm"),
+                      fg_color="gray30", hover_color="gray40", height=28).pack(
+            fill="x", padx=8, pady=(0, 8))
 
-        # Download button
+        # Output format
+        frame_fmt = ctk.CTkFrame(frame_left, fg_color="gray20")
+        frame_fmt.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkLabel(frame_fmt, text="Output format:",
+                     font=("Roboto", 13, "bold")).pack(anchor="w", padx=8, pady=(8, 2))
+        self._osm_format_labels = {lbl: key for key, (lbl, _ext, _out) in OUTPUT_FORMATS.items()}
+        default_label = OUTPUT_FORMATS[DEFAULT_OUTPUT_FORMAT][0]
+        self.osm_format_var = tk.StringVar(value=default_label)
+        self.osm_format_menu = ctk.CTkOptionMenu(
+            frame_fmt, values=list(self._osm_format_labels.keys()),
+            variable=self.osm_format_var, command=self._osm_format_changed)
+        self.osm_format_menu.pack(fill="x", padx=8, pady=(0, 4))
+        self.osm_format_hint = ctk.CTkLabel(
+            frame_fmt, text="", font=("Roboto", 11), text_color="gray60",
+            anchor="w", justify="left", wraplength=320)
+        self.osm_format_hint.pack(fill="x", padx=8, pady=(0, 8))
+        self._osm_format_changed(default_label)
+
+        # Action buttons
         ctk.CTkButton(frame_left, text="Download Selected Layers",
                       command=self.start_osm_download,
                       fg_color="#1e8bc3", hover_color="#3498db",
                       height=40, font=("Roboto", 14, "bold")).pack(
-            fill="x", padx=10, pady=8)
+            fill="x", padx=10, pady=(8, 4))
 
-        ctk.CTkLabel(frame_left,
-                     text="Output: GeoJSON per layer — compatible with QGIS, OSG, Terrain3D",
-                     font=("Roboto", 11), text_color="gray50").pack(padx=10, pady=(0, 4))
+        ctk.CTkButton(frame_left, text="Cancel Download",
+                      command=self._osm_cancel_download,
+                      fg_color="#7a2a2a", hover_color="#a33",
+                      height=30).pack(fill="x", padx=10, pady=(0, 8))
 
         # ── Right panel: layer selection ───────────────────────────────────
         frame_right = ctk.CTkFrame(self.tab_osm)
@@ -641,6 +686,41 @@ class OpenMapUnifierApp(ctk.CTk):
         if path:
             self.osm_dir_var.set(path)
 
+    def _osm_format_changed(self, label):
+        fmt_key = self._osm_format_labels.get(label, DEFAULT_OUTPUT_FORMAT)
+        if fmt_key == "osm":
+            hint = ("OSM XML: standards-compliant .osm file — ready for Train3D, "
+                    "JOSM, osm2world.")
+        else:
+            hint = ("GeoJSON: one .geojson per layer — compatible with QGIS, OSG, "
+                    "Terrain3D.")
+        self.osm_format_hint.configure(text=hint)
+
+    def _osm_cancel_download(self):
+        if getattr(self.osm_downloader, "stop_event", False):
+            return
+        self.osm_downloader.stop_event = True
+        print("[OSM] Cancel requested — stopping after current layer.")
+
+    def _open_folder(self, path):
+        if not path:
+            return
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception as e:
+            print(f"[WARN] Could not create folder {path}: {e}")
+        abspath = os.path.abspath(path)
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(abspath)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", abspath])
+            else:
+                subprocess.Popen(["xdg-open", abspath])
+        except Exception as e:
+            print(f"[ERROR] Could not open folder {abspath}: {e}")
+            messagebox.showerror("Open Folder", f"Could not open {abspath}:\n{e}")
+
     def start_osm_download(self):
         poly = self.text_polygon.get("1.0", "end").strip()
         if not poly:
@@ -659,6 +739,8 @@ class OpenMapUnifierApp(ctk.CTk):
 
         out_dir = self.osm_dir_var.get().strip() or "downloads_osm"
         self.osm_downloader.download_dir = out_dir
+        fmt_key = self._osm_format_labels.get(self.osm_format_var.get(), DEFAULT_OUTPUT_FORMAT)
+        self.osm_downloader.output_format = fmt_key
         self.osm_downloader.stop_event = False
 
         if not os.path.exists(out_dir):
@@ -668,7 +750,8 @@ class OpenMapUnifierApp(ctk.CTk):
         for name in selected:
             self.add_osm_row(name, "Queued...", 0, "-", "-")
 
-        print(f"[OSM] Starting download of {len(selected)} layers, buffer={buffer}m, dir={out_dir}")
+        print(f"[OSM] Starting download of {len(selected)} layers, "
+              f"buffer={buffer}m, format={fmt_key}, dir={out_dir}")
         threading.Thread(
             target=self.run_osm_downloads, args=(poly, selected, buffer), daemon=True
         ).start()
