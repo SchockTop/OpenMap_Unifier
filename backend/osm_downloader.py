@@ -114,6 +114,14 @@ DEFAULT_LAYERS = {"Roads & Paths", "Buildings", "Land Use", "Water"}
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
+# Supported output formats.
+# Key = internal id, value = (display label, file extension, Overpass [out:] type)
+OUTPUT_FORMATS = {
+    "geojson": ("GeoJSON (.geojson)", "geojson", "json"),
+    "osm":     ("OSM XML (.osm)",     "osm",     "xml"),
+}
+DEFAULT_OUTPUT_FORMAT = "geojson"
+
 
 # ---------------------------------------------------------------------------
 # Core class
@@ -121,12 +129,14 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 class OSMDownloader:
 
-    def __init__(self, download_dir="downloads_osm", proxy_manager=None):
+    def __init__(self, download_dir="downloads_osm", proxy_manager=None,
+                 output_format=DEFAULT_OUTPUT_FORMAT):
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
         self.proxy_manager = proxy_manager
         self.stop_event = False
         self._session = None
+        self.output_format = output_format if output_format in OUTPUT_FORMATS else DEFAULT_OUTPUT_FORMAT
 
     # ------------------------------------------------------------------
     # Session / proxy
@@ -213,9 +223,10 @@ class OSMDownloader:
             return 180
         return 300
 
-    def build_query(self, layer_name, bbox):
+    def build_query(self, layer_name, bbox, out_type="json"):
         """
         Build an Overpass QL query string for *layer_name* within *bbox*.
+        `out_type` is either "json" (→ GeoJSON pipeline) or "xml" (→ native .osm).
         Returns (query_str, timeout_seconds).
         """
         south, west, north, east = bbox
@@ -226,7 +237,18 @@ class OSMDownloader:
 
         parts = LAYERS[layer_name]["query_parts"]
         inner = ";\n  ".join(p.replace("{bbox}", bbox_str) for p in parts)
-        query = f"[out:json][timeout:{timeout}];\n(\n  {inner};\n);\nout geom;"
+
+        if out_type == "xml":
+            # Standard OSM XML: recurse-down ("(._;>;);") so referenced nodes
+            # are included. Produces files compatible with JOSM, Train3D, etc.
+            query = (
+                f"[out:xml][timeout:{timeout}];\n"
+                f"(\n  {inner};\n);\n"
+                f"(._;>;);\n"
+                f"out meta;"
+            )
+        else:
+            query = f"[out:json][timeout:{timeout}];\n(\n  {inner};\n);\nout geom;"
 
         return query, timeout
 
@@ -330,7 +352,10 @@ class OSMDownloader:
             .replace("&", "and")
             .replace("/", "_")
         )
-        out_file = os.path.join(self.download_dir, f"{safe}.geojson")
+
+        fmt_key = self.output_format if self.output_format in OUTPUT_FORMATS else DEFAULT_OUTPUT_FORMAT
+        _label, file_ext, out_type = OUTPUT_FORMATS[fmt_key]
+        out_file = os.path.join(self.download_dir, f"{safe}.{file_ext}")
 
         if os.path.exists(out_file):
             if progress_callback:
@@ -343,7 +368,7 @@ class OSMDownloader:
 
         cb(5, "Building query...")
 
-        query, timeout = self.build_query(layer_name, bbox)
+        query, timeout = self.build_query(layer_name, bbox, out_type=out_type)
         area_km2 = self.estimate_area_km2(bbox)
         cb(10, f"Querying Overpass ({area_km2:.0f} km2)...")
 
@@ -388,6 +413,32 @@ class OSMDownloader:
 
             raw = b"".join(chunks)
             cb(70, "Parsing response...")
+
+            if fmt_key == "osm":
+                text = raw.decode("utf-8", errors="replace")
+                lo = text.lower()
+                if "runtime error" in lo and ("out of memory" in lo or "timeout" in lo):
+                    msg = "Server error: runtime out-of-memory or timeout"
+                    cb(0, msg)
+                    return False, msg
+
+                cb(90, "Saving OSM XML...")
+                with open(out_file, "w", encoding="utf-8") as f:
+                    f.write(text)
+
+                elapsed_total = time.time() - t0
+                size_mb = os.path.getsize(out_file) / 1_048_576
+                cb(
+                    100,
+                    f"Done — {size_mb:.1f} MB OSM XML",
+                    f"{elapsed_total:.1f}s",
+                    "-",
+                )
+                print(
+                    f"[OSM] {layer_name}: {size_mb:.2f} MB OSM XML "
+                    f"({elapsed_total:.1f}s) -> {out_file}"
+                )
+                return True, out_file
 
             data = json.loads(raw.decode("utf-8"))
 
