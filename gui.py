@@ -461,7 +461,8 @@ class OpenMapUnifierApp(ctk.CTk):
         # Update status and reinitialize downloader with new settings
         self.update_proxy_status()
         self.downloader.proxy_manager = self.proxy_manager
-        self.downloader._session = None  # Force new session
+        self.downloader._session = None       # Force new Bayern session
+        self.osm_downloader._session = None   # Force new OSM session
 
 
     # =========================================================================
@@ -542,12 +543,31 @@ class OpenMapUnifierApp(ctk.CTk):
                       command=self._osm_browse_dir,
                       fg_color="gray30", hover_color="gray40").pack(side="left", padx=4)
 
+        # SSL verify toggle (for corporate SSL-inspection proxies)
+        ssl_row = ctk.CTkFrame(frame_left, fg_color="transparent")
+        ssl_row.pack(fill="x", padx=10, pady=(0, 4))
+        self.osm_ssl_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(ssl_row, text="Verify SSL certificates",
+                        variable=self.osm_ssl_var,
+                        font=("Roboto", 12)).pack(side="left")
+        ctk.CTkLabel(ssl_row, text="  Uncheck if your proxy does SSL inspection",
+                     font=("Roboto", 10), text_color="gray50").pack(side="left")
+
         # Download button
         ctk.CTkButton(frame_left, text="Download Selected Layers",
                       command=self.start_osm_download,
                       fg_color="#1e8bc3", hover_color="#3498db",
                       height=40, font=("Roboto", 14, "bold")).pack(
             fill="x", padx=10, pady=8)
+
+        ctk.CTkButton(frame_left, text="Test Overpass Connection",
+                      command=self._osm_test_connection,
+                      fg_color="gray30", hover_color="gray40",
+                      height=30).pack(fill="x", padx=10, pady=(0, 4))
+
+        self.lbl_osm_conn = ctk.CTkLabel(frame_left, text="",
+                                          font=("Roboto", 11), text_color="gray60")
+        self.lbl_osm_conn.pack(padx=10, pady=(0, 4))
 
         ctk.CTkLabel(frame_left,
                      text="Output: GeoJSON per layer — compatible with QGIS, OSG, Terrain3D",
@@ -636,6 +656,41 @@ class OpenMapUnifierApp(ctk.CTk):
         except Exception:
             self.lbl_osm_area.configure(text="Area estimate: invalid polygon")
 
+    def _osm_test_connection(self):
+        """Quick connectivity test to overpass-api.de — runs in thread."""
+        self.lbl_osm_conn.configure(text="Testing...", text_color="yellow")
+        ssl_verify = self.osm_ssl_var.get()
+
+        def _run():
+            import requests as _req
+            url = "https://overpass-api.de/api/interpreter"
+            # Tiny status query — should return in under 2 seconds
+            query = "[out:json][timeout:5];node(0,0,0,0);out;"
+            try:
+                session = self.osm_downloader._get_session()
+                r = session.post(url, data={"data": query},
+                                 timeout=10, verify=ssl_verify)
+                if r.status_code == 200:
+                    msg, color = "Overpass reachable (HTTP 200)", "#27ae60"
+                else:
+                    msg, color = f"HTTP {r.status_code} from Overpass", "#e67e22"
+            except _req.exceptions.SSLError:
+                msg = "SSL error — try disabling SSL verify (proxy inspection)"
+                color = "#e74c3c"
+            except _req.exceptions.ProxyError:
+                msg = "Proxy blocked — ask IT to whitelist overpass-api.de"
+                color = "#e74c3c"
+            except _req.exceptions.ConnectionError:
+                msg = "Cannot reach overpass-api.de — check proxy/network"
+                color = "#e74c3c"
+            except Exception as e:
+                msg, color = f"Error: {e}", "#e74c3c"
+
+            self.after(0, lambda: self.lbl_osm_conn.configure(text=msg, text_color=color))
+            print(f"[OSM] Connection test: {msg}")
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _osm_browse_dir(self):
         path = filedialog.askdirectory(title="Select OSM output directory")
         if path:
@@ -659,6 +714,7 @@ class OpenMapUnifierApp(ctk.CTk):
 
         out_dir = self.osm_dir_var.get().strip() or "downloads_osm"
         self.osm_downloader.download_dir = out_dir
+        self.osm_downloader.ssl_verify = self.osm_ssl_var.get()
         self.osm_downloader.stop_event = False
 
         if not os.path.exists(out_dir):

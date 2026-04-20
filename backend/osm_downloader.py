@@ -121,10 +121,11 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 class OSMDownloader:
 
-    def __init__(self, download_dir="downloads_osm", proxy_manager=None):
+    def __init__(self, download_dir="downloads_osm", proxy_manager=None, ssl_verify=True):
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
         self.proxy_manager = proxy_manager
+        self.ssl_verify = ssl_verify   # set False if corporate proxy does SSL inspection
         self.stop_event = False
         self._session = None
 
@@ -362,6 +363,7 @@ class OSMDownloader:
                     data={"data": query},
                     timeout=timeout + 60,
                     stream=True,
+                    verify=self.ssl_verify,
                 )
                 if response.status_code in (429, 504) and attempt < max_attempts:
                     wait = 5 * attempt
@@ -422,15 +424,32 @@ class OSMDownloader:
             return True, out_file
 
         except requests.exceptions.Timeout:
-            msg = "Timed out — try a smaller area"
+            msg = "Timed out — try a smaller area or fewer layers"
+            cb(0, msg)
+            return False, msg
+        except requests.exceptions.SSLError as e:
+            msg = (
+                "SSL certificate error — your proxy likely does SSL inspection. "
+                "Enable 'Disable SSL Verify' in OSM settings as a workaround."
+            )
+            print(f"[OSM] SSL error for {layer_name}: {e}")
+            cb(0, msg)
+            return False, msg
+        except requests.exceptions.ProxyError as e:
+            msg = (
+                "Proxy blocked the request — overpass-api.de may not be "
+                "whitelisted in your corporate proxy. Ask IT to allow it."
+            )
+            print(f"[OSM] Proxy error for {layer_name}: {e}")
+            cb(0, msg)
+            return False, msg
+        except requests.exceptions.ConnectionError as e:
+            msg = "Connection failed — check network/proxy settings"
+            print(f"[OSM] Connection error for {layer_name}: {e}")
             cb(0, msg)
             return False, msg
         except requests.exceptions.HTTPError as e:
-            msg = f"HTTP {e.response.status_code}"
-            cb(0, msg)
-            return False, msg
-        except requests.exceptions.RequestException as e:
-            msg = f"Network error: {e}"
+            msg = f"HTTP {e.response.status_code} from Overpass server"
             cb(0, msg)
             return False, msg
         except json.JSONDecodeError as e:
@@ -439,6 +458,7 @@ class OSMDownloader:
             return False, msg
         except Exception as e:
             msg = f"Error: {e}"
+            print(f"[OSM] Unexpected error for {layer_name}: {e}")
             cb(0, msg)
             return False, msg
 
