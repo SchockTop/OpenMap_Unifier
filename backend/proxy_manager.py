@@ -46,7 +46,10 @@ class ProxyConfig:
         self.password: str = ""
         self.domain: str = ""  # For NTLM (e.g., "COMPANY")
         self.no_proxy: str = "localhost,127.0.0.1"  # Comma-separated bypass list
-        
+        # SSL / TLS — unified across all downloaders
+        self.ssl_verify: bool = True          # False = skip verification (dev only)
+        self.ca_bundle_path: str = ""         # Absolute path to .pem, "" = system default
+
     def to_dict(self) -> dict:
         """Serialize config (excludes password for security)."""
         return {
@@ -57,9 +60,11 @@ class ProxyConfig:
             "username": self.username,
             "domain": self.domain,
             "no_proxy": self.no_proxy,
+            "ssl_verify": self.ssl_verify,
+            "ca_bundle_path": self.ca_bundle_path,
             # Password NOT saved for security
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'ProxyConfig':
         """Deserialize config."""
@@ -71,6 +76,8 @@ class ProxyConfig:
         config.username = data.get("username", "")
         config.domain = data.get("domain", "")
         config.no_proxy = data.get("no_proxy", "localhost,127.0.0.1")
+        config.ssl_verify = data.get("ssl_verify", True)
+        config.ca_bundle_path = data.get("ca_bundle_path", "")
         return config
 
 
@@ -248,6 +255,13 @@ class ProxyManager:
         self.config.enabled = False
         self._session = None
         print("[PROXY] Proxy disabled. Using direct connection.")
+
+    def set_ssl(self, ssl_verify: bool, ca_bundle_path: str = ""):
+        """Update SSL settings. Invalidates cached session."""
+        self.config.ssl_verify = ssl_verify
+        self.config.ca_bundle_path = ca_bundle_path or ""
+        self._session = None
+        print(f"[PROXY] SSL updated: verify={ssl_verify}, ca_bundle={ca_bundle_path or '(system default)'}")
     
     # =========================================================================
     # Session Management
@@ -262,10 +276,25 @@ class ProxyManager:
             return self._session
         
         session = requests.Session()
-        
+
         # Set User-Agent
         session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenMapUnifier/1.0'
-        
+
+        # SSL verify / CA bundle — applies regardless of proxy state.
+        # Priority: explicit CA bundle path > ssl_verify toggle > system default.
+        if self.config.ca_bundle_path and os.path.exists(self.config.ca_bundle_path):
+            session.verify = self.config.ca_bundle_path
+            print(f"[PROXY] Using custom CA bundle: {self.config.ca_bundle_path}")
+        elif not self.config.ssl_verify:
+            session.verify = False
+            # Suppress noisy InsecureRequestWarning when user opted out.
+            try:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
+            print("[PROXY] SSL verification DISABLED (ssl_verify=False)")
+
         if self.config.enabled and self.config.proxy_url:
             # Configure proxies
             proxy_url = self.config.proxy_url
@@ -410,6 +439,8 @@ class ProxyManager:
             "auth_type": self.config.auth_type,
             "username": self.config.username if self.config.auth_type != "none" else "",
             "ntlm_available": NTLM_AVAILABLE,
+            "ssl_verify": self.config.ssl_verify,
+            "ca_bundle_path": self.config.ca_bundle_path,
         }
     
     @staticmethod

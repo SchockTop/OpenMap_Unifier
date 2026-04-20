@@ -5,7 +5,9 @@
       "Bash(python -c \"import sys; print\\(sys.version\\)\")",
       "Bash(python -c ':*)",
       "WebSearch",
-      "Bash(rm -rf test_osm_output)"
+      "Bash(rm -rf test_osm_output)",
+      "Bash(git -C \"G:/Privat/Projekte/Work/OpenMap_Unifier\" add docs/superpowers/specs/2026-04-20-proxy-fixes-design.md)",
+      "Bash(git -C G:/Privat/Projekte/Work/OpenMap_Unifier commit -m ' *)"
     ]
   }
 }

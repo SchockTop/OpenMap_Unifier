@@ -547,15 +547,10 @@ class OpenMapUnifierApp(ctk.CTk):
                       command=self._osm_browse_dir,
                       fg_color="gray30", hover_color="gray40").pack(side="left", padx=4)
 
-        # SSL verify toggle (for corporate SSL-inspection proxies)
-        ssl_row = ctk.CTkFrame(frame_left, fg_color="transparent")
-        ssl_row.pack(fill="x", padx=10, pady=(0, 4))
-        self.osm_ssl_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(ssl_row, text="Verify SSL certificates",
-                        variable=self.osm_ssl_var,
-                        font=("Roboto", 12)).pack(side="left")
-        ctk.CTkLabel(ssl_row, text="  Uncheck if your proxy does SSL inspection",
-                     font=("Roboto", 10), text_color="gray50").pack(side="left")
+        # SSL settings moved to unified Proxy Settings dialog (applies to Bayern + OSM).
+        ctk.CTkLabel(frame_left,
+                     text="SSL / proxy settings → top-right 'Proxy Settings' button",
+                     font=("Roboto", 10), text_color="gray50").pack(padx=10, pady=(0, 4))
 
         # Download button
         ctk.CTkButton(frame_left, text="Download Selected Layers",
@@ -663,7 +658,6 @@ class OpenMapUnifierApp(ctk.CTk):
     def _osm_test_connection(self):
         """Quick connectivity test to overpass-api.de — runs in thread."""
         self.lbl_osm_conn.configure(text="Testing...", text_color="yellow")
-        ssl_verify = self.osm_ssl_var.get()
 
         def _run():
             import requests as _req
@@ -672,8 +666,8 @@ class OpenMapUnifierApp(ctk.CTk):
             query = "[out:json][timeout:5];node(0,0,0,0);out;"
             try:
                 session = self.osm_downloader._get_session()
-                r = session.post(url, data={"data": query},
-                                 timeout=10, verify=ssl_verify)
+                # session already has verify/CA bundle from proxy_manager
+                r = session.post(url, data={"data": query}, timeout=10)
                 if r.status_code == 200:
                     msg, color = "Overpass reachable (HTTP 200)", "#27ae60"
                 else:
@@ -718,7 +712,6 @@ class OpenMapUnifierApp(ctk.CTk):
 
         out_dir = self.osm_dir_var.get().strip() or "downloads_osm"
         self.osm_downloader.download_dir = out_dir
-        self.osm_downloader.ssl_verify = self.osm_ssl_var.get()
         self.osm_downloader.stop_event = False
 
         if not os.path.exists(out_dir):
@@ -785,8 +778,8 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         super().__init__(parent)
         
         self.proxy_manager = proxy_manager
-        self.title("Proxy Settings")
-        self.geometry("500x450")
+        self.title("Proxy & SSL Settings")
+        self.geometry("560x620")
         self.resizable(False, False)
         
         # Make modal
@@ -848,7 +841,31 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         self.entry_password.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
         
         self.creds_frame.grid_columnconfigure(1, weight=1)
-        
+
+        # --- SSL / TLS Section (applies to Bayern + OSM, regardless of proxy mode) ---
+        ssl_frame = ctk.CTkFrame(container, fg_color="gray20")
+        ssl_frame.pack(fill="x", pady=10, padx=5)
+
+        ctk.CTkLabel(ssl_frame, text="SSL / TLS", anchor="w",
+                     font=("Roboto", 13, "bold")).pack(fill="x", padx=10, pady=(8, 0))
+        ctk.CTkLabel(ssl_frame,
+                     text="Applied to both Bayern + OSM downloads. Required when a corporate proxy inspects HTTPS.",
+                     anchor="w", font=("Roboto", 10), text_color="gray60",
+                     wraplength=500, justify="left").pack(fill="x", padx=10, pady=(0, 5))
+
+        self.var_ssl_verify = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(ssl_frame, text="Verify SSL certificates",
+                        variable=self.var_ssl_verify).pack(anchor="w", padx=10, pady=3)
+
+        ca_row = ctk.CTkFrame(ssl_frame, fg_color="transparent")
+        ca_row.pack(fill="x", padx=10, pady=(3, 8))
+        ctk.CTkLabel(ca_row, text="CA bundle (.pem):", width=120, anchor="w").pack(side="left")
+        self.entry_ca_bundle = ctk.CTkEntry(ca_row, placeholder_text="(empty = system default)")
+        self.entry_ca_bundle.pack(side="left", fill="x", expand=True, padx=5)
+        ctk.CTkButton(ca_row, text="Browse...", width=80,
+                      command=self._browse_ca_bundle,
+                      fg_color="gray30", hover_color="gray40").pack(side="left")
+
         # --- Status / Info ---
         self.lbl_status = ctk.CTkLabel(container, text="", font=("Roboto", 11), text_color="gray60")
         self.lbl_status.pack(pady=10)
@@ -892,9 +909,23 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         
         self.entry_domain.delete(0, "end")
         self.entry_domain.insert(0, config.domain)
-        
+
+        # SSL fields
+        self.var_ssl_verify.set(config.ssl_verify)
+        self.entry_ca_bundle.delete(0, "end")
+        self.entry_ca_bundle.insert(0, config.ca_bundle_path)
+
         self.on_mode_change()
         self.on_auth_change(self.seg_auth.get())
+
+    def _browse_ca_bundle(self):
+        path = filedialog.askopenfilename(
+            title="Select CA bundle (.pem)",
+            filetypes=[("PEM certificates", "*.pem *.crt *.cer"), ("All files", "*.*")],
+        )
+        if path:
+            self.entry_ca_bundle.delete(0, "end")
+            self.entry_ca_bundle.insert(0, path)
     
     def on_mode_change(self):
         """Handle mode radio button change."""
@@ -973,7 +1004,13 @@ class ProxySettingsDialog(ctk.CTkToplevel):
                 password=self.entry_password.get(),
                 domain=self.entry_domain.get()
             )
-        
+
+        # SSL settings apply regardless of proxy mode.
+        self.proxy_manager.set_ssl(
+            ssl_verify=bool(self.var_ssl_verify.get()),
+            ca_bundle_path=self.entry_ca_bundle.get().strip(),
+        )
+
         if save:
             self.proxy_manager.save_config()
     

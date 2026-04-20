@@ -121,11 +121,10 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 class OSMDownloader:
 
-    def __init__(self, download_dir="downloads_osm", proxy_manager=None, ssl_verify=True):
+    def __init__(self, download_dir="downloads_osm", proxy_manager=None):
         self.download_dir = download_dir
         os.makedirs(download_dir, exist_ok=True)
         self.proxy_manager = proxy_manager
-        self.ssl_verify = ssl_verify   # set False if corporate proxy does SSL inspection
         self.stop_event = False
         self._session = None
 
@@ -363,8 +362,7 @@ class OSMDownloader:
                     data={"data": query},
                     timeout=timeout + 60,
                     stream=True,
-                    verify=self.ssl_verify,
-                )
+                )  # verify/CA bundle inherited from session (proxy_manager.get_session())
                 if response.status_code in (429, 504) and attempt < max_attempts:
                     wait = 5 * attempt
                     cb(10, f"Server busy (HTTP {response.status_code}), retry {attempt}/{max_attempts-1} in {wait}s...")
