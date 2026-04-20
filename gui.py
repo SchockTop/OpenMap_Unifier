@@ -76,11 +76,13 @@ class OpenMapUnifierApp(ctk.CTk):
         
         self.tab_tools = self.tabview.add("Map Tools")
         self.tab_osm = self.tabview.add("OSM Data")
+        self.tab_downloads = self.tabview.add("Downloads")
         self.tab_help = self.tabview.add("Help & Guide")
         self.tab_console = self.tabview.add("Console")
 
         self.setup_tools_tab()
         self.setup_osm_tab()
+        self.setup_downloads_tab()
         self.setup_help_tab()
         self.setup_console_tab()
 
@@ -218,6 +220,202 @@ class OpenMapUnifierApp(ctk.CTk):
         self.download_list.pack(fill="both", expand=True, padx=5, pady=5)
         
         self.download_rows = {} # Map filename -> widgets
+
+    # =========================================================================
+    # Downloads tab — overview + clear + license attribution
+    # =========================================================================
+
+    # Folders the Downloads tab tracks. Tuples of (display_name, relative_path).
+    DOWNLOAD_FOLDERS = [
+        ("Bayern: DGM1 (Height)",          os.path.join("downloads_bayern", "dgm1")),
+        ("Bayern: DGM5 (Height)",          os.path.join("downloads_bayern", "dgm5")),
+        ("Bayern: DOP20 (Orthophoto)",     os.path.join("downloads_bayern", "dop20")),
+        ("Bayern: DOP40 (Orthophoto)",     os.path.join("downloads_bayern", "dop40")),
+        ("Bayern: LoD2 (3D buildings)",    os.path.join("downloads_bayern", "lod2")),
+        ("Bayern: Laser (LiDAR LAZ)",      os.path.join("downloads_bayern", "laser")),
+        ("Bayern: Relief WMS",             os.path.join("downloads_bayern", "relief_wms")),
+        ("Bayern: DOP40 WMS",              os.path.join("downloads_bayern", "dop40_wms")),
+        ("OSM Data",                       "downloads_osm"),
+        # Legacy folders from earlier versions — shown if present.
+        ("Legacy: downloads_relief",       "downloads_relief"),
+        ("Legacy: downloads_satellite",    "downloads_satellite"),
+        ("Legacy: downloads_dop20",        "downloads_dop20"),
+        ("Legacy: downloads",              "downloads"),
+    ]
+
+    def setup_downloads_tab(self):
+        self.tab_downloads.grid_columnconfigure(0, weight=1)
+        self.tab_downloads.grid_rowconfigure(1, weight=1)
+
+        # Header row
+        header = ctk.CTkFrame(self.tab_downloads)
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        ctk.CTkLabel(header, text="Downloads Overview",
+                     font=("Roboto", 18, "bold")).pack(side="left", padx=8, pady=6)
+        ctk.CTkButton(header, text="Refresh", width=90,
+                      command=self.refresh_downloads_overview,
+                      fg_color="#3498db", hover_color="#2980b9").pack(side="right", padx=4, pady=4)
+        ctk.CTkButton(header, text="Open base folder", width=140,
+                      command=lambda: self._open_folder("."),
+                      fg_color="gray30", hover_color="gray40").pack(side="right", padx=4, pady=4)
+
+        # Scrollable list of folder rows
+        self._downloads_scroll = ctk.CTkScrollableFrame(self.tab_downloads)
+        self._downloads_scroll.grid(row=1, column=0, sticky="nsew", padx=10, pady=4)
+
+        # License / attribution footer
+        lic = ctk.CTkFrame(self.tab_downloads, fg_color="gray15")
+        lic.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 10))
+        ctk.CTkLabel(lic, text="Attribution & Licensing",
+                     font=("Roboto", 13, "bold")).pack(anchor="w", padx=10, pady=(6, 2))
+        ctk.CTkLabel(
+            lic, justify="left", anchor="w", wraplength=1000,
+            text=(
+                "OpenStreetMap data  —  © OpenStreetMap contributors, "
+                "Open Database License (ODbL) v1.0.\n"
+                "    • Attribution: '© OpenStreetMap contributors'\n"
+                "    • Share-alike: any adapted database must be offered under ODbL.\n"
+                "    • Keep open: if you redistribute, do not apply DRM without an unrestricted copy.\n"
+                "    • Full text: https://opendatacommons.org/licenses/odbl/1-0/\n"
+                "\n"
+                "Bayern geodata  —  © Bayerische Vermessungsverwaltung, Creative Commons BY 4.0.\n"
+                "    • Attribution: 'Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de'\n"
+                "    • Full text: https://creativecommons.org/licenses/by/4.0/"
+            ),
+            font=("Consolas", 10), text_color="gray75",
+        ).pack(anchor="w", padx=10, pady=(0, 8))
+
+        self.refresh_downloads_overview()
+
+    def refresh_downloads_overview(self):
+        """Rebuild the folder rows with current file counts + sizes."""
+        # Clear prior rows
+        for child in self._downloads_scroll.winfo_children():
+            child.destroy()
+
+        total_files = 0
+        total_bytes = 0
+        for display, path in self.DOWNLOAD_FOLDERS:
+            count, size = self._folder_stats(path)
+            if count == 0 and not os.path.exists(path) and "Legacy" in display:
+                # Hide legacy folders that don't exist at all.
+                continue
+            total_files += count
+            total_bytes += size
+            self._add_download_folder_row(display, path, count, size)
+
+        # Totals footer row
+        footer = ctk.CTkFrame(self._downloads_scroll, fg_color="gray25")
+        footer.pack(fill="x", padx=2, pady=(8, 2))
+        ctk.CTkLabel(footer, text="TOTAL",
+                     font=("Roboto", 12, "bold"),
+                     width=200, anchor="w").pack(side="left", padx=8, pady=6)
+        ctk.CTkLabel(footer,
+                     text=f"{total_files} files, {self._fmt_bytes(total_bytes)}",
+                     font=("Roboto", 12, "bold")).pack(side="left", padx=8, pady=6)
+
+    def _add_download_folder_row(self, display, path, count, size):
+        row = ctk.CTkFrame(self._downloads_scroll, fg_color="gray20")
+        row.pack(fill="x", padx=2, pady=2)
+        row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(row, text=display, width=220, anchor="w",
+                     font=("Roboto", 12, "bold")).grid(row=0, column=0, padx=8, pady=(6, 0), sticky="w")
+        ctk.CTkLabel(row, text=path, anchor="w",
+                     font=("Consolas", 10), text_color="gray55").grid(
+            row=1, column=0, padx=8, pady=(0, 6), sticky="w")
+
+        if count == 0:
+            summary = "— empty —"
+            color = "gray55"
+        else:
+            summary = f"{count} files  •  {self._fmt_bytes(size)}"
+            color = "#8cc8ff"
+        ctk.CTkLabel(row, text=summary, font=("Roboto", 12),
+                     text_color=color).grid(row=0, column=1, padx=8, pady=6, sticky="e")
+
+        btns = ctk.CTkFrame(row, fg_color="transparent")
+        btns.grid(row=0, column=2, rowspan=2, padx=6, pady=4, sticky="e")
+        ctk.CTkButton(btns, text="Open", width=60,
+                      command=lambda p=path: self._open_folder(p),
+                      fg_color="gray30", hover_color="gray40").pack(side="left", padx=2)
+        ctk.CTkButton(btns, text="Clear", width=60,
+                      command=lambda p=path, d=display: self._clear_folder(p, d),
+                      fg_color="#b03a2e", hover_color="#c0392b",
+                      state=("normal" if count > 0 else "disabled")).pack(side="left", padx=2)
+
+    @staticmethod
+    def _folder_stats(path):
+        """Return (file_count, total_bytes). Non-existent folder -> (0, 0)."""
+        if not os.path.isdir(path):
+            return 0, 0
+        count, size = 0, 0
+        for root, _, files in os.walk(path):
+            for f in files:
+                try:
+                    size += os.path.getsize(os.path.join(root, f))
+                    count += 1
+                except OSError:
+                    pass
+        return count, size
+
+    @staticmethod
+    def _fmt_bytes(n):
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if n < 1024:
+                return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+            n /= 1024
+        return f"{n:.1f} PB"
+
+    def _open_folder(self, path):
+        """Open a folder in the OS file manager (Windows-first, best-effort)."""
+        if not os.path.exists(path):
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception:
+                messagebox.showwarning("Not found", f"Folder does not exist:\n{path}")
+                return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(os.path.abspath(path))
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", path])
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showwarning("Could not open", f"{path}\n\n{e}")
+
+    def _clear_folder(self, path, display):
+        """Delete every file inside `path` after user confirmation. Keeps the folder."""
+        if not os.path.isdir(path):
+            return
+        count, size = self._folder_stats(path)
+        if count == 0:
+            return
+        ok = messagebox.askyesno(
+            "Clear downloads?",
+            f"Delete {count} files ({self._fmt_bytes(size)}) from:\n\n{display}\n{path}\n\n"
+            "The folder itself will be kept. This cannot be undone.",
+        )
+        if not ok:
+            return
+        deleted = 0
+        errors = 0
+        for root, _, files in os.walk(path):
+            for f in files:
+                try:
+                    os.remove(os.path.join(root, f))
+                    deleted += 1
+                except OSError:
+                    errors += 1
+        print(f"[INFO] Cleared {deleted} files from {path} ({errors} errors).")
+        self.refresh_downloads_overview()
+        if errors:
+            messagebox.showwarning("Partial clear",
+                                   f"Deleted {deleted} files, {errors} could not be removed "
+                                   "(may be locked or in use).")
 
     def setup_help_tab(self):
         scroll = ctk.CTkScrollableFrame(self.tab_help)
