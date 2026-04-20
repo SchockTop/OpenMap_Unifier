@@ -173,7 +173,8 @@ class MapDownloader:
 
     def download_file(self, url, file_name, progress_callback=None):
         target_path = os.path.join(self.download_dir, file_name)
-        
+        part_path = target_path + ".part"
+
         dir_name = os.path.dirname(target_path)
         if dir_name and not os.path.exists(dir_name):
              try:
@@ -185,6 +186,15 @@ class MapDownloader:
             if progress_callback:
                 progress_callback(file_name, 100, "Skipped (Exists)", "-", "-")
             return True
+
+        # Clean up any leftover .part from a prior interrupted run — we restart
+        # from zero rather than attempt a resumable download (servers don't
+        # always honour Range, and the complexity isn't worth it here).
+        if os.path.exists(part_path):
+            try:
+                os.remove(part_path)
+            except OSError:
+                pass
 
         if progress_callback:
             progress_callback(file_name, 0, "Connecting...", "-", "-")
@@ -202,14 +212,20 @@ class MapDownloader:
             response.raise_for_status()
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
-            
-            with open(target_path, 'wb') as f:
+
+            with open(part_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=65536):
                     if self.stop_event:
                         if progress_callback:
                             progress_callback(file_name, 0, "Cancelled", "-", "-")
+                        # Don't leave a partial around after cancel.
+                        try:
+                            f.close()
+                            os.remove(part_path)
+                        except OSError:
+                            pass
                         return False
-                        
+
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
@@ -230,11 +246,40 @@ class MapDownloader:
                             status_msg = f"{current_str} / {total_str}"
 
                             progress_callback(file_name, percent, status_msg, speed_str, eta_str)
-            
+
+            # Size-check: if server reported a total, ensure we got all of it.
+            if total_size > 0 and downloaded != total_size:
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+                msg = f"Truncated: got {downloaded} of {total_size} bytes"
+                print(f"[ERROR] {file_name}: {msg}")
+                if progress_callback:
+                    progress_callback(file_name, 0, msg, "-", "-")
+                return False
+
+            # Atomic rename: .part -> final name. Only now is the tile visible
+            # as "exists" to the skip-check on subsequent runs.
+            try:
+                os.replace(part_path, target_path)
+            except OSError as e:
+                msg = f"Rename failed: {e}"
+                print(f"[ERROR] {file_name}: {msg}")
+                if progress_callback:
+                    progress_callback(file_name, 0, msg, "-", "-")
+                return False
+
             if progress_callback:
                 progress_callback(file_name, 100, "Completed", "-", "-")
             return True
         except Exception as e:
+            # Ensure no stale .part survives an exception.
+            try:
+                if os.path.exists(part_path):
+                    os.remove(part_path)
+            except OSError:
+                pass
             # Classify via ProxyManager if available — otherwise fall back to str(e).
             if self.proxy_manager:
                 try:
