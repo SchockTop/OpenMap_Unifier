@@ -114,6 +114,20 @@ DEFAULT_LAYERS = {"Roads & Paths", "Buildings", "Land Use", "Water"}
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
+# Mirror endpoints used as fallbacks when the primary rejects the request
+# (e.g. 406 Not Acceptable from a CDN / upstream proxy, or 5xx outages).
+OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
+]
+
+# HTTP status codes that should trigger a retry (either same endpoint or mirror).
+# 406 = Not Acceptable (usually missing/unsupported Accept header upstream)
+# 429 = Too Many Requests, 502/503/504 = transient gateway issues
+RETRYABLE_STATUS = {406, 408, 429, 500, 502, 503, 504}
+
 # Supported output formats.
 # Key = internal id, value = (display label, file extension, Overpass [out:] type)
 OUTPUT_FORMATS = {
@@ -148,10 +162,31 @@ class OSMDownloader:
                 self._session = self.proxy_manager.get_session()
             else:
                 self._session = requests.Session()
-                self._session.headers.update(
-                    {"User-Agent": "OpenMapUnifier/1.0 (open geodata tool)"}
-                )
+            # Always enforce a standards-compliant User-Agent. Some Overpass
+            # mirrors / upstream CDNs reject requests with missing or unusual
+            # User-Agent strings (seen as HTTP 406 or 403).
+            self._session.headers.update({
+                "User-Agent": "OpenMapUnifier/1.0 (+https://github.com/schocktop/openmap_unifier)",
+            })
         return self._session
+
+    @staticmethod
+    def _request_headers(out_type):
+        """Build per-request headers matching the requested Overpass output format.
+
+        Overpass dispatchers / CDNs occasionally return 406 Not Acceptable when
+        the Accept header is absent or doesn't match the [out:...] format in
+        the query, so we always send an explicit Accept.
+        """
+        if out_type == "xml":
+            accept = "application/osm3s+xml, application/xml;q=0.9, */*;q=0.1"
+        else:
+            accept = "application/json, */*;q=0.1"
+        return {
+            "Accept": accept,
+            "Accept-Encoding": "gzip, deflate",
+            "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+        }
 
     # ------------------------------------------------------------------
     # Geometry helpers
@@ -375,26 +410,77 @@ class OSMDownloader:
         t0 = time.time()
         try:
             session = self._get_session()
-            # Retry up to 3 times on 429 / 504 with back-off
-            max_attempts = 3
+            headers = self._request_headers(out_type)
+
+            # Try the primary endpoint, then mirrors, with back-off on
+            # transient / upstream errors (including 406 Not Acceptable).
+            endpoints = list(dict.fromkeys([OVERPASS_URL, *OVERPASS_MIRRORS]))
+            max_attempts_per_endpoint = 2
             response = None
-            for attempt in range(1, max_attempts + 1):
-                if self.stop_event:
-                    cb(0, "Cancelled")
-                    return False, "Cancelled"
-                response = session.post(
-                    OVERPASS_URL,
-                    data={"data": query},
-                    timeout=timeout + 60,
-                    stream=True,
+            last_status = None
+            last_error = None
+
+            for ep_index, endpoint in enumerate(endpoints):
+                for attempt in range(1, max_attempts_per_endpoint + 1):
+                    if self.stop_event:
+                        cb(0, "Cancelled")
+                        return False, "Cancelled"
+                    try:
+                        response = session.post(
+                            endpoint,
+                            data={"data": query},
+                            headers=headers,
+                            timeout=timeout + 60,
+                            stream=True,
+                        )
+                    except requests.exceptions.RequestException as e:
+                        last_error = e
+                        response = None
+                        print(f"[OSM] {layer_name}: network error on {endpoint}: {e}")
+                        break  # try next mirror
+
+                    last_status = response.status_code
+                    if response.status_code < 400:
+                        break  # success
+
+                    if response.status_code in RETRYABLE_STATUS:
+                        # Drain and close so the connection can be reused.
+                        try:
+                            response.close()
+                        except Exception:
+                            pass
+
+                        is_last_endpoint = ep_index == len(endpoints) - 1
+                        is_last_attempt = attempt == max_attempts_per_endpoint
+                        if is_last_endpoint and is_last_attempt:
+                            break  # give up, will raise_for_status below
+
+                        wait = 3 * attempt
+                        host = endpoint.split("/")[2]
+                        cb(
+                            10,
+                            f"HTTP {response.status_code} from {host}, "
+                            f"retrying ({attempt}/{max_attempts_per_endpoint})...",
+                        )
+                        print(
+                            f"[OSM] {layer_name}: HTTP {response.status_code} "
+                            f"from {endpoint}, waiting {wait}s (attempt {attempt})"
+                        )
+                        time.sleep(wait)
+                        continue
+
+                    # Non-retryable 4xx → stop immediately
+                    break
+
+                if response is not None and response.status_code < 400:
+                    break  # don't try further mirrors
+
+            if response is None:
+                # All endpoints failed with network errors
+                raise last_error if last_error else requests.exceptions.RequestException(
+                    "No response from any Overpass endpoint"
                 )
-                if response.status_code in (429, 504) and attempt < max_attempts:
-                    wait = 5 * attempt
-                    cb(10, f"Server busy (HTTP {response.status_code}), retry {attempt}/{max_attempts-1} in {wait}s...")
-                    print(f"[OSM] {layer_name}: HTTP {response.status_code}, retrying in {wait}s (attempt {attempt})")
-                    time.sleep(wait)
-                    continue
-                break
+
             response.raise_for_status()
 
             chunks = []
@@ -477,8 +563,28 @@ class OSMDownloader:
             cb(0, msg)
             return False, msg
         except requests.exceptions.HTTPError as e:
-            msg = f"HTTP {e.response.status_code}"
+            code = e.response.status_code if e.response is not None else "?"
+            detail = ""
+            try:
+                body = (e.response.text or "")[:200].strip().replace("\n", " ")
+                if body:
+                    detail = f" — {body}"
+            except Exception:
+                pass
+
+            hints = {
+                400: "Invalid Overpass query",
+                403: "Blocked by server — check proxy / User-Agent",
+                404: "Endpoint not found",
+                406: "Server rejected Accept header — all Overpass mirrors failed",
+                413: "Query too large — reduce area or buffer",
+                429: "Rate-limited — wait a moment and retry",
+                504: "Server timed out — try a smaller area",
+            }
+            hint = hints.get(code, "Server error")
+            msg = f"HTTP {code}: {hint}{detail}"
             cb(0, msg)
+            print(f"[OSM] {layer_name}: {msg}")
             return False, msg
         except requests.exceptions.RequestException as e:
             msg = f"Network error: {e}"
