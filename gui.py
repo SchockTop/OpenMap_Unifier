@@ -59,8 +59,12 @@ class OpenMapUnifierApp(ctk.CTk):
         self.proxy_manager = None
         if PROXY_AVAILABLE:
             self.proxy_manager = get_proxy_manager(config_dir=".")
-            # Auto-detect proxy on startup
-            self.proxy_manager.auto_detect()
+            # Respect saved config: only auto-detect if user hasn't saved manual
+            # settings, or explicitly chose auto-detect mode. This prevents
+            # auto_detect() from clobbering saved manual host/username/auth_type.
+            cfg = self.proxy_manager.config
+            if cfg.auto_detect or (not cfg.enabled and not cfg.proxy_url):
+                self.proxy_manager.auto_detect()
         
         # Create downloader with proxy support
         self.downloader = MapDownloader(proxy_manager=self.proxy_manager)
