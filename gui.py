@@ -562,6 +562,23 @@ class OpenMapUnifierApp(ctk.CTk):
         high_res = self.chk_high_res_relief.get() == 1
         fmt = self.seg_format.get().lower()
 
+        # Pre-flight estimate — warn before kicking off multi-hundred-GB pulls.
+        preview = self._estimate_bayern_download(poly, selected)
+        if preview is not None:
+            tiles_total, mb_total, per_dataset = preview
+            lines = [f"  • {label}: {n} tiles  ~{self.downloader.format_bytes(mb*1024*1024)}"
+                     for label, n, mb in per_dataset]
+            preamble = (
+                f"About to queue {tiles_total} tiles across {len(selected)} dataset(s).\n"
+                f"Estimated total: ~{self.downloader.format_bytes(mb_total * 1024 * 1024)}\n\n"
+                + "\n".join(lines)
+                + "\n\nProceed?"
+            )
+            # Only prompt once the estimate crosses ~2 GB — smaller pulls go straight through.
+            if mb_total > 2_000:
+                if not messagebox.askyesno("Confirm large download", preamble):
+                    return
+
         for key in selected:
             meta = BAYERN_DATASETS[key]
             out_dir = os.path.join("downloads_bayern", key)
@@ -582,6 +599,34 @@ class OpenMapUnifierApp(ctk.CTk):
                     args=(poly, key, wms_fmt, high_res, out_dir),
                     daemon=True,
                 ).start()
+
+    def _estimate_bayern_download(self, poly, selected_keys):
+        """Return (total_tiles, total_mb, [(label, tile_count, mb)…]) or None on error."""
+        total_tiles = 0
+        total_mb = 0.0
+        per_dataset = []
+        try:
+            for key in selected_keys:
+                meta = BAYERN_DATASETS[key]
+                if meta["kind"] == "raw":
+                    tiles = self.downloader.generate_1km_grid_files(poly, dataset=key)
+                    n = len(tiles)
+                    mb = n * meta.get("avg_tile_mb", 0)
+                else:
+                    # WMS: ~5 MB/tile high-res, ~1 MB/tile standard — rough.
+                    tiles = self.downloader.generate_relief_tiles(
+                        poly, layer=meta.get("layer", "dop40"),
+                        format_ext="tif" if key == "relief_wms" else "jpg",
+                        high_res=False)
+                    n = len(tiles)
+                    mb = n * 1
+                per_dataset.append((meta["label"], n, mb))
+                total_tiles += n
+                total_mb += mb
+        except Exception as e:
+            print(f"[WARN] size estimate failed: {e}")
+            return None
+        return total_tiles, total_mb, per_dataset
 
     def _run_bayern_raw(self, poly, key, out_dir):
         """Download a raw Bayern dataset (e.g. dgm1, dop20) into its own folder."""
