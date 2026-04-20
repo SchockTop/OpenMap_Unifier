@@ -64,13 +64,31 @@ Legacy folders (`downloads_relief`, `downloads_satellite`, `downloads_dop20`) ar
 
 Also added `.gitignore` for `__pycache__/`, `downloads_*/`, `proxy_config.json`, and local Claude settings — untracking the tracked `.pyc` files in the process.
 
-## Blender GIS question — deferred
+## Bonus: Blender GIS batch-import fix  ✅
 
-You raised the batch-import `IOError: Unable to read georef infos from worldfile or geotiff tags` in your notes. Separate project (Blender scripting + file-format diagnosis) — not touched here. When you want to pick it up, that's its own brainstorming session.
+The error you hit — `IOError: Unable to read georef infos from worldfile or geotiff tags` — is because Bayern's raw GeoTIFFs ship without internal georef tags. Blender GIS couldn't batch-import them.
+
+Added `backend/worldfile.py` — reads the Bayern tile filename (which encodes position in EPSG:25832), combines with dataset pixel size, writes:
+
+- **`.tfw`** — ESRI worldfile (6 lines: pixel size, rotations, top-left centre coords)
+- **`.prj`** — EPSG:25832 WKT
+
+These get auto-written after every raw Bayern download. There's also a `.tfw` button on every Bayern raw-tile row in the Downloads tab so you can regenerate sidecars for folders downloaded before this change.
+
+Unit-verified: DGM1 tile `32672_5424` → top-left pixel centre `(672000.5, 5424999.5)` at 1m. DOP20 tile at 0.2m → `(672000.1, 5425999.9)`. QGIS / Blender GIS / GDAL all read `.tfw + .prj` sidecars natively.
+
+## Bonus: download robustness
+
+- **Atomic writes**: downloads go to `<file>.part`, renamed only after size verification. Prevents the "cancelled mid-download, left a partial, next run skipped it" failure mode.
+- **Pre-flight size estimate**: when the estimated total download exceeds 2 GB (e.g. DOP20 across a larger polygon), a confirmation dialog lists tile count + estimated size per dataset before anything downloads. Small pulls go through with no friction.
 
 ## Commit log on this branch
 
 ```
+e66c3ad feat(bayern): pre-flight size estimate + confirm dialog for big downloads
+05fc7df fix(downloader): atomic .part write, size-check, no partials on cancel/error
+3b325ed feat(bayern): auto-write .tfw + .prj sidecars for Blender GIS batch import
+1491d5b docs: overnight progress notes — all 3 sub-projects complete
 f3026ac chore: add .gitignore, untrack __pycache__, ignore local downloads + creds
 5d182e8 feat(ux): downloads overview tab with per-folder clear + license panel
 20fd6d0 feat(bayern): catalog-driven dataset picker — real height data (DGM1)
@@ -80,6 +98,14 @@ d1552f4 feat(proxy): unified SSL verify + CA bundle in ProxyConfig
 728f9d6 osm: add ssl_verify toggle, test-connection button, classified errors (baseline)
 c66820d docs: add proxy fixes & diagnostics design spec (sub-project 1/3)
 ```
+
+## Opening the PR
+
+The `gh` CLI isn't on PATH in this environment. Open the PR manually:
+
+    https://github.com/SchockTop/OpenMap_Unifier/pull/new/auto/proxy-bayern-ux-rework
+
+Repo has moved from `Kleinschock/OpenMap_Unifier` to `SchockTop/OpenMap_Unifier` — GitHub redirects, both URLs work.
 
 ## What I did NOT touch
 
