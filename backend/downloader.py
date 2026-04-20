@@ -23,6 +23,121 @@ except ImportError:
         ProxyManager = None
         get_proxy_manager = None
 
+# =============================================================================
+# Bayern Open Data dataset catalog
+# =============================================================================
+# Single source of truth for which datasets the GUI offers.
+# All raw tile datasets follow the same 1km x 1km grid (EPSG:25832) and the
+# URL pattern: https://download1.bayernwolke.de/a/<key>/data/<tile_id><ext>
+# where <tile_id> is derived from easting/northing km (e.g. "32672_5424").
+#
+# License: Bayerische Vermessungsverwaltung — CC BY 4.0
+# Attribution (recommended): "Datenquelle: Bayerische Vermessungsverwaltung
+#                              – www.geodaten.bayern.de"
+#
+# Fields per entry:
+#   label        — human-readable name
+#   category     — group for UI (height, ortho, buildings, laser, wms_render)
+#   description  — short blurb for the GUI
+#   ext          — file extension downloaded
+#   resolution   — ground sample distance / LoD, for user info
+#   kind         — "raw" (direct tile file) or "wms" (rendered tile)
+#   # For raw: url_key is the path segment under /a/ on bayernwolke.de
+#   # For wms: base_url, layer, mime are used by generate_relief_tiles()
+# -----------------------------------------------------------------------------
+BAYERN_DATASETS = {
+    # ---- HEIGHT / TERRAIN (raw) ----
+    "dgm1": {
+        "label": "DGM1 — Digital Terrain Model (Height, 1 m)",
+        "category": "height",
+        "description": "Bare-earth elevation, 1m grid, GeoTIFF. THIS is real height data for Blender/3D.",
+        "ext": ".tif",
+        "resolution": "1 m / pixel",
+        "kind": "raw",
+        "url_key": "dgm1",
+    },
+    "dgm5": {
+        "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
+        "category": "height",
+        "description": "Coarser 5m grid — useful for large areas where DGM1 would be too big.",
+        "ext": ".tif",
+        "resolution": "5 m / pixel",
+        "kind": "raw",
+        "url_key": "dgm5",
+    },
+    # ---- ORTHOPHOTOS (raw) ----
+    "dop20": {
+        "label": "DOP20 RGB — Orthophoto 20 cm (Highest quality)",
+        "category": "ortho",
+        "description": "Raw RGB aerial imagery, 20cm/px, GeoTIFF. Large files.",
+        "ext": ".tif",
+        "resolution": "20 cm / pixel",
+        "kind": "raw",
+        "url_key": "dop20",
+    },
+    "dop40": {
+        "label": "DOP40 RGB — Orthophoto 40 cm",
+        "category": "ortho",
+        "description": "Raw RGB aerial imagery, 40cm/px, GeoTIFF. ~4x smaller than DOP20.",
+        "ext": ".tif",
+        "resolution": "40 cm / pixel",
+        "kind": "raw",
+        "url_key": "dop40",
+    },
+    # ---- 3D BUILDINGS ----
+    "lod2": {
+        "label": "LoD2 — 3D building models (CityGML)",
+        "category": "buildings",
+        "description": "CityGML with building volumes at Level-of-Detail 2 (roof shapes).",
+        "ext": ".zip",
+        "resolution": "2 km tiles",
+        "kind": "raw",
+        "url_key": "lod2",
+    },
+    # ---- LASER / LIDAR ----
+    "laser": {
+        "label": "Laser — Raw LiDAR point cloud (LAZ)",
+        "category": "laser",
+        "description": "Compressed LAS (LAZ) — the raw point cloud DGM1 is derived from.",
+        "ext": ".laz",
+        "resolution": "point cloud",
+        "kind": "raw",
+        "url_key": "laser",
+    },
+    # ---- WMS-RENDERED (visual) ----
+    "relief_wms": {
+        "label": "Relief (hillshade WMS)",
+        "category": "wms_render",
+        "description": "Stylised shaded-relief rendering. Visual only — not elevation numbers.",
+        "ext": ".tiff",
+        "resolution": "WMS render",
+        "kind": "wms",
+        "base_url": "https://geoservices.bayern.de/pro/wms/dgm/v1/relief",
+        "layer": "by_relief_schraeglicht",
+        "mime": "image/tiff",
+    },
+    "dop40_wms": {
+        "label": "DOP40 (WMS quick preview)",
+        "category": "wms_render",
+        "description": "WMS-rendered orthophoto preview. Faster but lower fidelity than raw DOP40.",
+        "ext": ".jpg",
+        "resolution": "WMS render",
+        "kind": "wms",
+        "base_url": "https://geoservices.bayern.de/od/wms/dop/v1/dop40",
+        "layer": "by_dop40c",
+        "mime": "image/jpeg",
+    },
+}
+
+BAYERN_CATEGORY_LABELS = {
+    "height":     "Height / Terrain (raw elevation)",
+    "ortho":      "Orthophotos (aerial imagery)",
+    "buildings":  "3D Buildings",
+    "laser":      "Laser / LiDAR",
+    "wms_render": "Visual renders (WMS)",
+}
+
+
 class MapDownloader:
     def __init__(self, download_dir="downloads", proxy_manager=None):
         self.download_dir = download_dir
@@ -245,17 +360,15 @@ class MapDownloader:
             end_y = math.ceil(maxy / grid_res) * grid_res
             
             files = []
-            
-            # Base URLs (Best Guess/Standard)
-            base_urls = {
-                "dgm1": ("https://download1.bayernwolke.de/a/dgm1/data", ".tif"),
-                "dop20": ("https://download1.bayernwolke.de/a/dop20/data", ".tif"),
-                "dop40": ("https://download1.bayernwolke.de/a/dop40/data", ".tif"),
-                "lod2": ("https://download1.bayernwolke.de/a/lod2/data", ".zip"),
-                "laser": ("https://download1.bayernwolke.de/a/laser/data", ".laz")
-            }
 
-            base_url, ext = base_urls.get(dataset, ("", ""))
+            # Derive base URL + extension from the dataset catalog (single source of truth).
+            meta = BAYERN_DATASETS.get(dataset)
+            if not meta or meta.get("kind") != "raw":
+                print(f"[WARN] Unknown or non-raw Bayern dataset '{dataset}' — nothing to generate.")
+                return []
+            url_key = meta["url_key"]
+            ext = meta["ext"]
+            base_url = f"https://download1.bayernwolke.de/a/{url_key}/data"
             # DGM1 is typically .tif (already set above)
             
             for x in range(start_x, end_x, grid_res):

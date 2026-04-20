@@ -9,7 +9,7 @@ import os
 import time
 
 from backend.geometry import PolygonExtractor
-from backend.downloader import MapDownloader
+from backend.downloader import MapDownloader, BAYERN_DATASETS, BAYERN_CATEGORY_LABELS
 from backend.osm_downloader import OSMDownloader, LAYER_ORDER, DEFAULT_LAYERS, LAYERS as OSM_LAYERS
 
 # Import proxy manager (optional)
@@ -124,43 +124,65 @@ class OpenMapUnifierApp(ctk.CTk):
         
         ctk.CTkLabel(frame_right, text="2. Data Downloader", font=("Roboto", 18, "bold")).pack(pady=10)
         
-        # --- Height Data Section ---
-        frame_height = ctk.CTkFrame(frame_right, fg_color="gray20")
-        frame_height.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(frame_height, text="Height Data (Relief)", font=("Roboto", 14, "bold")).pack(pady=5)
-        
-        height_controls = ctk.CTkFrame(frame_height, fg_color="transparent")
-        height_controls.pack(pady=5, fill="x", padx=5)
-        
-        btn_relief = ctk.CTkButton(height_controls, text="Download Relief", command=self.start_relief_download, fg_color="#8e44ad", hover_color="#9b59b6")
-        btn_relief.pack(side="left", padx=5)
-        
-        self.chk_high_res_relief = ctk.CTkCheckBox(height_controls, text="High-Res (300 DPI)")
-        self.chk_high_res_relief.pack(side="left", padx=10)
-        
-        # --- Satellite Data Section ---
-        frame_sat = ctk.CTkFrame(frame_right, fg_color="gray20")
-        frame_sat.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(frame_sat, text="Satellite Imagery", font=("Roboto", 14, "bold")).pack(pady=5)
-        
-        # DOP20 (Raw Files - Higher Quality)
-        sat_row1 = ctk.CTkFrame(frame_sat, fg_color="transparent")
-        sat_row1.pack(pady=3, fill="x", padx=5)
-        
-        btn_dop20 = ctk.CTkButton(sat_row1, text="Download DOP20 (Raw TIF)", command=self.start_dop20_download, fg_color="#27ae60", hover_color="#2ecc71")
-        btn_dop20.pack(side="left", padx=5)
-        ctk.CTkLabel(sat_row1, text="20cm/px, best quality", font=("Roboto", 11), text_color="gray60").pack(side="left", padx=5)
-        
-        # DOP40 (WMS Tiles)
-        sat_row2 = ctk.CTkFrame(frame_sat, fg_color="transparent")
-        sat_row2.pack(pady=3, fill="x", padx=5)
-        
-        btn_dop40 = ctk.CTkButton(sat_row2, text="Download DOP40 (WMS)", command=self.start_satellite_download, fg_color="#3498db", hover_color="#2980b9")
-        btn_dop40.pack(side="left", padx=5)
-        
-        self.seg_format = ctk.CTkSegmentedButton(sat_row2, values=["JPG", "TIF"])
+        # --- Bayern Open Data picker (catalog-driven) --------------------
+        frame_bayern = ctk.CTkFrame(frame_right, fg_color="gray20")
+        frame_bayern.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(frame_bayern, text="Bayern Open Data",
+                     font=("Roboto", 14, "bold")).pack(pady=(6, 2))
+        ctk.CTkLabel(frame_bayern,
+                     text="Pick one or more datasets. DGM1 = real height data (for Blender / displacement).",
+                     font=("Roboto", 10), text_color="gray60",
+                     wraplength=460, justify="left").pack(padx=8, pady=(0, 4))
+
+        scroll_bayern = ctk.CTkScrollableFrame(frame_bayern, height=260)
+        scroll_bayern.pack(fill="x", padx=6, pady=4)
+
+        # Build checkboxes grouped by category, driven by BAYERN_DATASETS.
+        self.bayern_dataset_vars = {}  # key -> BooleanVar
+        for cat_key, cat_label in BAYERN_CATEGORY_LABELS.items():
+            entries = [(k, v) for k, v in BAYERN_DATASETS.items() if v["category"] == cat_key]
+            if not entries:
+                continue
+            ctk.CTkLabel(scroll_bayern, text=cat_label,
+                         font=("Roboto", 12, "bold"),
+                         text_color="#8cc8ff").pack(anchor="w", padx=6, pady=(6, 2))
+            for key, meta in entries:
+                row = ctk.CTkFrame(scroll_bayern, fg_color="gray15")
+                row.pack(fill="x", padx=4, pady=2)
+                var = tk.BooleanVar(value=(key == "dgm1"))  # default-on: DGM1
+                self.bayern_dataset_vars[key] = var
+                ctk.CTkCheckBox(row, text=meta["label"], variable=var,
+                                font=("Roboto", 12)).pack(anchor="w", padx=6, pady=(4, 0))
+                ctk.CTkLabel(row,
+                             text=f"{meta['description']}   ({meta['resolution']}, {meta['ext']})",
+                             font=("Roboto", 10), text_color="gray60",
+                             anchor="w", justify="left",
+                             wraplength=430).pack(anchor="w", padx=26, pady=(0, 4))
+
+        # WMS-only option: high-res toggle for WMS renders (300 DPI).
+        wms_opts = ctk.CTkFrame(frame_bayern, fg_color="transparent")
+        wms_opts.pack(fill="x", padx=6, pady=(0, 4))
+        self.chk_high_res_relief = ctk.CTkCheckBox(wms_opts, text="WMS high-res (300 DPI)")
+        self.chk_high_res_relief.pack(side="left", padx=4)
+
+        # Format segmented button — only applies to DOP40 WMS render.
+        ctk.CTkLabel(wms_opts, text="DOP40-WMS format:",
+                     font=("Roboto", 10), text_color="gray60").pack(side="left", padx=(12, 2))
+        self.seg_format = ctk.CTkSegmentedButton(wms_opts, values=["JPG", "TIF"], width=120)
         self.seg_format.set("JPG")
-        self.seg_format.pack(side="left", padx=5)
+        self.seg_format.pack(side="left", padx=2)
+
+        ctk.CTkButton(frame_bayern, text="Download Selected Bayern Datasets",
+                      command=self.start_bayern_download,
+                      fg_color="#27ae60", hover_color="#2ecc71",
+                      height=36, font=("Roboto", 13, "bold")).pack(fill="x", padx=8, pady=(4, 4))
+
+        # License / attribution footer
+        ctk.CTkLabel(frame_bayern,
+                     text="© Bayerische Vermessungsverwaltung — CC BY 4.0\n"
+                          "Attribution: 'Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de'",
+                     font=("Roboto", 9), text_color="gray50",
+                     justify="left").pack(anchor="w", padx=8, pady=(0, 6))
         
         # --- Mass Data Section ---
         frame_meta = ctk.CTkFrame(frame_right, fg_color="gray20")
@@ -292,90 +314,75 @@ class OpenMapUnifierApp(ctk.CTk):
              print("[ERROR] No files found in metalink.")
              messagebox.showerror("Error", "Could not parse any files from the metalink.\nCheck the console/log for details.")
 
-    def start_relief_download(self):
+    def start_bayern_download(self):
+        """Dispatch download for every selected dataset in the Bayern picker."""
         poly = self.text_polygon.get("1.0", "end").strip()
         if not poly:
             messagebox.showwarning("Warning", "Please extract a polygon first.")
+            return
+
+        selected = [k for k, v in self.bayern_dataset_vars.items() if v.get()]
+        if not selected:
+            messagebox.showwarning("Warning", "Select at least one Bayern dataset.")
             return
 
         high_res = self.chk_high_res_relief.get() == 1
-        res_label = "High-Res 300 DPI" if high_res else "Standard"
-        print(f"[INFO] Starting Relief Download ({res_label})...")
-        self.downloader.download_dir = "downloads_relief"
-        if not os.path.exists("downloads_relief"):
-            os.makedirs("downloads_relief")
-            
-        self.add_download_row("Relief", f"Generating {res_label} tiles...", 0, "Calculating", "...")
-        threading.Thread(target=self.run_relief_gen, args=(poly, "relief", "tiff", high_res), daemon=True).start()
-
-    def start_satellite_download(self):
-        poly = self.text_polygon.get("1.0", "end").strip()
-        if not poly:
-            messagebox.showwarning("Warning", "Please extract a polygon first.")
-            return
-
         fmt = self.seg_format.get().lower()
-        print(f"[INFO] Starting Satellite (DOP40 WMS) Download... Format: {fmt}")
-        
-        self.downloader.download_dir = "downloads_satellite"
-        if not os.path.exists("downloads_satellite"):
-            os.makedirs("downloads_satellite")
-            
-        self.add_download_row("DOP40", f"Generating DOP40 ({fmt}) tiles...", 0, "Calculating", "...")
-        threading.Thread(target=self.run_relief_gen, args=(poly, "dop40", fmt, False), daemon=True).start()
 
-    def start_dop20_download(self):
-        """Download raw DOP20 satellite imagery files (highest quality)."""
-        poly = self.text_polygon.get("1.0", "end").strip()
-        if not poly:
-            messagebox.showwarning("Warning", "Please extract a polygon first.")
+        for key in selected:
+            meta = BAYERN_DATASETS[key]
+            out_dir = os.path.join("downloads_bayern", key)
+            os.makedirs(out_dir, exist_ok=True)
+            if meta["kind"] == "raw":
+                self.add_download_row(meta["label"], "Generating tile list...", 0, "Calculating", "...")
+                threading.Thread(
+                    target=self._run_bayern_raw,
+                    args=(poly, key, out_dir),
+                    daemon=True,
+                ).start()
+            else:  # wms
+                # DOP40 WMS uses the picker's format; relief WMS is always tiff.
+                wms_fmt = fmt if key == "dop40_wms" else "tiff"
+                self.add_download_row(meta["label"], "Generating WMS tiles...", 0, "Calculating", "...")
+                threading.Thread(
+                    target=self._run_bayern_wms,
+                    args=(poly, key, wms_fmt, high_res, out_dir),
+                    daemon=True,
+                ).start()
+
+    def _run_bayern_raw(self, poly, key, out_dir):
+        """Download a raw Bayern dataset (e.g. dgm1, dop20) into its own folder."""
+        # MapDownloader.download_dir is shared across threads, so we wrap the
+        # call in a per-download change. Downloads are added sequentially per
+        # dataset so this is safe.
+        self.downloader.download_dir = out_dir
+        files = self.downloader.generate_1km_grid_files(poly, dataset=key)
+        if not files:
+            self.after(0, lambda: self.add_download_row(
+                key.upper(), "No intersecting tiles found.", 0, "Error", ""))
             return
+        print(f"[INFO] {key}: generated {len(files)} tiles -> {out_dir}")
+        for fname, _ in files:
+            self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
+        self.run_downloads_batch(files)
 
-        print("[INFO] Starting DOP20 (Raw TIF) Download...")
-        
-        self.downloader.download_dir = "downloads_dop20"
-        if not os.path.exists("downloads_dop20"):
-            os.makedirs("downloads_dop20")
-            
-        self.add_download_row("DOP20", "Generating file list...", 0, "Calculating", "...")
-        threading.Thread(target=self.run_raw_download, args=(poly, "dop20"), daemon=True).start()
-
-    def run_raw_download(self, poly, dataset):
-        """Handler for raw file downloads (DOP20, DGM1, etc.)."""
-        print(f"[INFO] Generating {dataset.upper()} file list for polygon...")
-        
-        files = self.downloader.generate_1km_grid_files(poly, dataset=dataset)
-        if files:
-            print(f"[INFO] Generated {len(files)} files to download.")
-            
-            for fname, url in files:
-                self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
-                
-            self.add_download_row(dataset.upper(), f"Queued {len(files)} files.", 100, "Ready", "")
-            self.run_downloads_batch(files)
-        else:
-            print("[WARN] No files generated for polygon.")
-            self.add_download_row(dataset.upper(), "No intersecting files found.", 0, "Error", "")
-
-    def run_relief_gen(self, poly, type_key, format_ext="jpg", high_res=False):
-        print(f"[INFO] Generating {type_key} tiles for polygon (Format: {format_ext}, High-Res: {high_res})...")
-        # 'dop40' or 'relief' - logic is handled in downloader now
-        layer = "by_relief_schraeglicht" if type_key == "relief" else "dop40"
-        
-        tiles = self.downloader.generate_relief_tiles(poly, layer=layer, format_ext=format_ext, high_res=high_res)
-        if tiles:
-             print(f"[INFO] Generated {len(tiles)} tiles.")
-             
-             # Show pending state immediately
-             for fname, url in tiles:
-                  # Use 'after' to ensure thread safety when manipulating UI from thread
-                  self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
-                  
-             self.add_download_row(type_key.title(), f"Queued {len(tiles)} tiles.", 100, "Ready", "")
-             self.run_downloads_batch(tiles)
-        else:
-             print("[WARN] No tiles generated.")
-             self.add_download_row(type_key.title(), "No intersecting tiles found.", 0, "Error", "")
+    def _run_bayern_wms(self, poly, key, fmt, high_res, out_dir):
+        """Download a WMS-rendered Bayern dataset (relief, dop40_wms)."""
+        self.downloader.download_dir = out_dir
+        meta = BAYERN_DATASETS[key]
+        # generate_relief_tiles historically uses layer="by_relief_schraeglicht"
+        # for relief and "dop40" to trigger DOP40 inside the downloader.
+        layer = meta["layer"] if key == "relief_wms" else "dop40"
+        tiles = self.downloader.generate_relief_tiles(
+            poly, layer=layer, format_ext=fmt, high_res=high_res)
+        if not tiles:
+            self.after(0, lambda: self.add_download_row(
+                key.upper(), "No intersecting tiles found.", 0, "Error", ""))
+            return
+        print(f"[INFO] {key}: generated {len(tiles)} WMS tiles -> {out_dir}")
+        for fname, _ in tiles:
+            self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
+        self.run_downloads_batch(tiles)
 
     def add_download_row(self, filename, status, percent, speed, eta):
         if filename in self.download_rows:
