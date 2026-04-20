@@ -973,19 +973,24 @@ class ProxySettingsDialog(ctk.CTkToplevel):
             self.var_mode.set("none")
     
     def do_test_connection(self):
-        """Test the current connection."""
-        self.lbl_status.configure(text="Testing connection...", text_color="yellow")
+        """Test connections to all known data sources (Bayern + OSM)."""
+        self.lbl_status.configure(text="Testing Bayern + OSM...", text_color="yellow")
         self.update()
-        
-        # Apply current form settings temporarily
+
+        # Apply current form settings temporarily (including SSL).
         self.apply_settings(save=False)
-        
-        success, message = self.proxy_manager.test_connection()
-        
-        if success:
-            self.lbl_status.configure(text=f"✓ {message}", text_color="#27ae60")
-        else:
-            self.lbl_status.configure(text=f"✗ {message}", text_color="#e74c3c")
+
+        results = self.proxy_manager.test_connections()
+
+        lines = []
+        overall_ok = True
+        for label, (ok, msg) in results.items():
+            mark = "✓" if ok else "✗"
+            lines.append(f"{mark} {label}: {msg}")
+            overall_ok = overall_ok and ok
+
+        color = "#27ae60" if overall_ok else "#e74c3c"
+        self.lbl_status.configure(text="\n".join(lines), text_color=color)
     
     def apply_settings(self, save=True):
         """Apply form settings to proxy manager."""

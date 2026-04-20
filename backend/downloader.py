@@ -116,10 +116,18 @@ class MapDownloader:
                 progress_callback(file_name, 100, "Completed", "-", "-")
             return True
         except Exception as e:
-            msg = str(e)
-            print(f"[ERROR] Download failed for {file_name}: {msg}")
+            # Classify via ProxyManager if available — otherwise fall back to str(e).
+            if self.proxy_manager:
+                try:
+                    code, msg = self.proxy_manager.classify_error(e)
+                    user_msg = f"[{code}] {msg}"
+                except Exception:
+                    user_msg = f"Error: {e}"
+            else:
+                user_msg = f"Error: {e}"
+            print(f"[ERROR] Download failed for {file_name}: {user_msg}")
             if progress_callback:
-                progress_callback(file_name, 0, f"Error: {msg}", "-", "-")
+                progress_callback(file_name, 0, user_msg, "-", "-")
             return False
 
     def parse_metalink(self, file_path):

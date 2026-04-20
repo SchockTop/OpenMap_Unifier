@@ -356,6 +356,66 @@ class ProxyManager:
     # Connection Testing
     # =========================================================================
     
+    # Public targets for the multi-endpoint test — covers both data sources.
+    TEST_TARGETS = {
+        "Bayern (geoservices.bayern.de)": "https://geoservices.bayern.de",
+        "OSM (overpass-api.de)": "https://overpass-api.de/api/status",
+    }
+
+    @staticmethod
+    def classify_error(exc: Exception) -> Tuple[str, str]:
+        """
+        Return (short_code, user_message) for a requests/network exception.
+
+        short_code in: PROXY_AUTH | SSL | PROXY | TIMEOUT | DNS | HTTP | OTHER
+        """
+        # Inspect HTTP 407 first — it can appear as HTTPError or inside ProxyError
+        try:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+        except Exception:
+            status = None
+        msg_text = str(exc).lower()
+
+        if status == 407 or "407" in msg_text or "proxy authentication required" in msg_text:
+            return ("PROXY_AUTH",
+                    "Proxy rejected credentials (407). Check username/password/auth type (Basic vs NTLM).")
+
+        if isinstance(exc, requests.exceptions.SSLError):
+            return ("SSL",
+                    "SSL error — set a CA bundle (.pem) in Proxy Settings, or disable SSL verify if your proxy inspects HTTPS.")
+
+        if isinstance(exc, requests.exceptions.ProxyError):
+            return ("PROXY",
+                    "Proxy connection failed — check the proxy URL is reachable and the host/port are correct.")
+
+        if isinstance(exc, requests.exceptions.Timeout):
+            return ("TIMEOUT",
+                    "Timed out — the proxy or target may be slow, blocking, or requires authentication.")
+
+        if isinstance(exc, requests.exceptions.ConnectionError):
+            return ("DNS",
+                    "Cannot connect — check network, DNS, and proxy settings.")
+
+        if isinstance(exc, requests.exceptions.HTTPError):
+            return ("HTTP", f"HTTP {status}: {exc}")
+
+        return ("OTHER", str(exc) or exc.__class__.__name__)
+
+    def test_connections(self) -> Dict[str, Tuple[bool, str]]:
+        """Test all known targets; return {label: (ok, message)}."""
+        return {label: self._test_one(url) for label, url in self.TEST_TARGETS.items()}
+
+    def _test_one(self, url: str) -> Tuple[bool, str]:
+        try:
+            session = self.get_session()
+            response = session.get(url, timeout=10)
+            if 200 <= response.status_code < 400:
+                return True, f"OK (HTTP {response.status_code})"
+            return False, f"HTTP {response.status_code}"
+        except Exception as e:
+            code, msg = self.classify_error(e)
+            return False, f"[{code}] {msg}"
+
     def test_connection(self, url: str = None) -> Tuple[bool, str]:
         """
         Test if the current proxy configuration works.
@@ -383,22 +443,10 @@ class ProxyManager:
                 print(f"[PROXY] {msg}")
                 return False, msg
                 
-        except requests.exceptions.ProxyError as e:
-            msg = f"Proxy error: {str(e)}"
-            print(f"[PROXY] {msg}")
-            return False, msg
-        except requests.exceptions.ConnectionError as e:
-            msg = f"Connection error: {str(e)}"
-            print(f"[PROXY] {msg}")
-            return False, msg
-        except requests.exceptions.Timeout:
-            msg = "Connection timed out (15s)"
-            print(f"[PROXY] {msg}")
-            return False, msg
         except Exception as e:
-            msg = f"Error: {str(e)}"
-            print(f"[PROXY] {msg}")
-            return False, msg
+            code, msg = self.classify_error(e)
+            print(f"[PROXY] [{code}] {msg}")
+            return False, f"[{code}] {msg}"
     
     # =========================================================================
     # Config Persistence

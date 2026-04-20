@@ -421,42 +421,21 @@ class OSMDownloader:
             )
             return True, out_file
 
-        except requests.exceptions.Timeout:
-            msg = "Timed out — try a smaller area or fewer layers"
-            cb(0, msg)
-            return False, msg
-        except requests.exceptions.SSLError as e:
-            msg = (
-                "SSL certificate error — your proxy likely does SSL inspection. "
-                "Enable 'Disable SSL Verify' in OSM settings as a workaround."
-            )
-            print(f"[OSM] SSL error for {layer_name}: {e}")
-            cb(0, msg)
-            return False, msg
-        except requests.exceptions.ProxyError as e:
-            msg = (
-                "Proxy blocked the request — overpass-api.de may not be "
-                "whitelisted in your corporate proxy. Ask IT to allow it."
-            )
-            print(f"[OSM] Proxy error for {layer_name}: {e}")
-            cb(0, msg)
-            return False, msg
-        except requests.exceptions.ConnectionError as e:
-            msg = "Connection failed — check network/proxy settings"
-            print(f"[OSM] Connection error for {layer_name}: {e}")
-            cb(0, msg)
-            return False, msg
-        except requests.exceptions.HTTPError as e:
-            msg = f"HTTP {e.response.status_code} from Overpass server"
-            cb(0, msg)
-            return False, msg
         except json.JSONDecodeError as e:
             msg = f"Bad server response: {e}"
             cb(0, msg)
             return False, msg
         except Exception as e:
-            msg = f"Error: {e}"
-            print(f"[OSM] Unexpected error for {layer_name}: {e}")
+            # Unified error classification — same messages as Bayern downloads.
+            if self.proxy_manager:
+                try:
+                    code, user_msg = self.proxy_manager.classify_error(e)
+                    msg = f"[{code}] {user_msg}"
+                except Exception:
+                    msg = f"Error: {e}"
+            else:
+                msg = f"Error: {e}"
+            print(f"[OSM] {layer_name}: {msg}")
             cb(0, msg)
             return False, msg
 
