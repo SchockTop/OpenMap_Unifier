@@ -10,6 +10,7 @@ import time
 
 from backend.geometry import PolygonExtractor
 from backend.downloader import MapDownloader, BAYERN_DATASETS, BAYERN_CATEGORY_LABELS
+from backend.worldfile import generate_for_folder as generate_worldfiles
 from backend.osm_downloader import OSMDownloader, LAYER_ORDER, DEFAULT_LAYERS, LAYERS as OSM_LAYERS
 
 # Import proxy manager (optional)
@@ -339,6 +340,22 @@ class OpenMapUnifierApp(ctk.CTk):
         ctk.CTkButton(btns, text="Open", width=60,
                       command=lambda p=path: self._open_folder(p),
                       fg_color="gray30", hover_color="gray40").pack(side="left", padx=2)
+
+        # Write worldfiles — only meaningful for raw Bayern TIFF folders.
+        # Look up the matching BAYERN_DATASETS key via the folder basename.
+        dataset_key = os.path.basename(path)
+        dataset_meta = BAYERN_DATASETS.get(dataset_key, {})
+        can_worldfile = (count > 0
+                         and dataset_meta.get("kind") == "raw"
+                         and dataset_meta.get("pixel_size_m")
+                         and dataset_meta.get("ext") in (".tif", ".tiff"))
+        if can_worldfile:
+            ctk.CTkButton(
+                btns, text=".tfw", width=50,
+                command=lambda p=path, k=dataset_key: self._write_worldfiles(p, k),
+                fg_color="#2e86de", hover_color="#3498db",
+            ).pack(side="left", padx=2)
+
         ctk.CTkButton(btns, text="Clear", width=60,
                       command=lambda p=path, d=display: self._clear_folder(p, d),
                       fg_color="#b03a2e", hover_color="#c0392b",
@@ -386,6 +403,24 @@ class OpenMapUnifierApp(ctk.CTk):
                 subprocess.Popen(["xdg-open", path])
         except Exception as e:
             messagebox.showwarning("Could not open", f"{path}\n\n{e}")
+
+    def _write_worldfiles(self, path, dataset_key):
+        """Generate .tfw + .prj for every tile in a raw Bayern folder."""
+        meta = BAYERN_DATASETS.get(dataset_key, {})
+        pixel = meta.get("pixel_size_m")
+        if not pixel:
+            messagebox.showwarning("Unknown dataset", f"No pixel size known for {dataset_key}.")
+            return
+        try:
+            made, skipped = generate_worldfiles(path, pixel_size_m=pixel)
+        except Exception as e:
+            messagebox.showerror("Worldfile error", f"Failed in {path}:\n{e}")
+            return
+        print(f"[INFO] {dataset_key}: wrote worldfiles for {made} tiles "
+              f"({skipped} non-Bayern filenames skipped).")
+        messagebox.showinfo("Worldfiles written",
+                            f"{made} .tfw + .prj sidecars written in:\n{path}\n\n"
+                            f"({skipped} filenames didn't match the Bayern tile scheme.)")
 
     def _clear_folder(self, path, display):
         """Delete every file inside `path` after user confirmation. Keeps the folder."""
@@ -563,6 +598,19 @@ class OpenMapUnifierApp(ctk.CTk):
         for fname, _ in files:
             self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
         self.run_downloads_batch(files)
+
+        # After downloads finish, write .tfw + .prj sidecars so Blender GIS
+        # (and any other georef-aware tool) can batch-import without the
+        # "Unable to read georef infos from worldfile or geotiff tags" error.
+        meta = BAYERN_DATASETS.get(key, {})
+        pixel = meta.get("pixel_size_m")
+        if pixel and meta.get("ext") in (".tif", ".tiff"):
+            try:
+                made, skipped = generate_worldfiles(out_dir, pixel_size_m=pixel)
+                print(f"[INFO] {key}: wrote worldfiles for {made} tiles "
+                      f"({skipped} non-Bayern filenames skipped).")
+            except Exception as e:
+                print(f"[WARN] {key}: worldfile generation failed: {e}")
 
     def _run_bayern_wms(self, poly, key, fmt, high_res, out_dir):
         """Download a WMS-rendered Bayern dataset (relief, dop40_wms)."""
