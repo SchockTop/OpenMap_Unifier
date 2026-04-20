@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# venv
+venv/
+.venv/
+
+# Local IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# Local Claude settings
+.claude/settings.local.json
+
+# Proxy config (contains usernames; password already omitted)
+proxy_config.json
+
+# Downloads — large data folders should not be committed
+downloads/
+downloads_*/
+downloads_bayern/
+downloads_osm/
+downloads_relief/
+downloads_satellite/
+
+# OS
+Thumbs.db
+.DS_Store
