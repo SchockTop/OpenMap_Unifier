@@ -89,6 +89,9 @@ class ProxyManager:
     
     CONFIG_FILE = "proxy_config.json"
     TEST_URL = "https://geoservices.bayern.de"
+    # Test against the OSM endpoint too — some corporate proxies accept one
+    # destination and return 407 for others (per-URL ACLs).
+    TEST_URL_OSM = "https://overpass-api.de/api/status"
     
     def __init__(self, config_dir: str = "."):
         self.config_dir = config_dir
@@ -353,16 +356,28 @@ class ProxyManager:
     # =========================================================================
     
     @staticmethod
+    def _normalize_proxy_url(proxy_url: str) -> str:
+        """
+        Normalize a proxy URL: add scheme if missing, strip whitespace and
+        any trailing slash, leave the host:port part untouched.
+        """
+        if not proxy_url:
+            return proxy_url
+        proxy_url = proxy_url.strip().rstrip("/")
+        if "://" not in proxy_url:
+            proxy_url = "http://" + proxy_url
+        return proxy_url
+
+    @staticmethod
     def _build_proxy_url(proxy_url: str, username: str, password: str) -> str:
         """
         Embed credentials into a proxy URL, URL-encoding them so passwords
         containing @ : / # % ! ? & etc. do not break URL parsing — a common
         root cause of HTTP 407 Proxy Authentication Required.
         """
+        proxy_url = ProxyManager._normalize_proxy_url(proxy_url)
         if not username:
             return proxy_url
-        if "://" not in proxy_url:
-            proxy_url = "http://" + proxy_url
         protocol, rest = proxy_url.split("://", 1)
         # Strip any credentials the user may have pasted into the URL already
         if "@" in rest:
@@ -382,17 +397,25 @@ class ProxyManager:
 
         session = requests.Session()
 
+        # CRITICAL: disable requests' automatic reading of proxy settings
+        # from environment variables (HTTP_PROXY/HTTPS_PROXY) and .netrc.
+        # Otherwise an old/wrong proxy URL or stale credentials in the user's
+        # shell environment silently override session.proxies and cause 407
+        # even though our configured credentials are correct.
+        session.trust_env = False
+
         # Set User-Agent
         session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenMapUnifier/1.0'
 
         if self.config.enabled and self.config.proxy_url:
-            proxy_url = self.config.proxy_url
+            base_url = self._normalize_proxy_url(self.config.proxy_url)
+            proxy_url = base_url
 
             if self.config.auth_type == "basic" and self.config.username:
                 # URL-encode credentials so special characters don't break
                 # the proxy URL parser (root cause of most 407 errors).
                 proxy_url = self._build_proxy_url(
-                    proxy_url, self.config.username, self.config.password
+                    base_url, self.config.username, self.config.password
                 )
                 # Also pre-set Proxy-Authorization for plain HTTP proxies.
                 # (For HTTPS, requests uses the URL creds during CONNECT.)
@@ -421,9 +444,8 @@ class ProxyManager:
                     print("[PROXY] WARNING: NTLM requested but requests-ntlm not installed!")
 
             # Mask credentials in the log line
-            safe_log = self.config.proxy_url
-            print(f"[PROXY] Session configured with proxy: {safe_log} "
-                  f"(auth: {self.config.auth_type})")
+            print(f"[PROXY] Session configured with proxy: {base_url} "
+                  f"(auth: {self.config.auth_type}, trust_env=False)")
         else:
             print("[PROXY] Session configured for direct connection (no proxy).")
 
@@ -438,7 +460,7 @@ class ProxyManager:
         if not self.config.enabled or not self.config.proxy_url:
             return None
 
-        proxy_url = self.config.proxy_url
+        proxy_url = self._normalize_proxy_url(self.config.proxy_url)
         if self.config.auth_type == "basic" and self.config.username:
             proxy_url = self._build_proxy_url(
                 proxy_url, self.config.username, self.config.password
@@ -455,34 +477,38 @@ class ProxyManager:
     
     def test_connection(self, url: str = None) -> Tuple[bool, str]:
         """
-        Test if the current proxy configuration works.
-        
-        Args:
-            url: URL to test against (defaults to TEST_URL)
-            
-        Returns:
-            Tuple of (success: bool, message: str)
+        Test if the current proxy configuration works against the OSM
+        endpoint (the one the downloader actually uses), not just against
+        a generic HTTPS target. Corporate proxies can have per-URL ACLs
+        that make a generic test succeed while OSM still fails with 407.
         """
-        url = url or self.TEST_URL
-        
+        url = url or self.TEST_URL_OSM
+
         try:
             session = self.get_session()
-            
+
             print(f"[PROXY] Testing connection to {url}...")
             response = session.get(url, timeout=15)
-            
-            if response.status_code == 200:
+
+            if response.status_code < 400:
                 msg = f"Connection successful! Status: {response.status_code}"
                 print(f"[PROXY] {msg}")
                 return True, msg
+            elif response.status_code == 407:
+                msg = ("HTTP 407: Proxy rejected credentials. Check username, "
+                       "password, and auth type. See console for diagnostics.")
+                print(f"[PROXY] {msg}")
+                self.diagnose()
+                return False, msg
             else:
                 msg = f"Connection returned status {response.status_code}"
                 print(f"[PROXY] {msg}")
                 return False, msg
-                
+
         except requests.exceptions.ProxyError as e:
             msg = f"Proxy error: {str(e)}"
             print(f"[PROXY] {msg}")
+            self.diagnose()
             return False, msg
         except requests.exceptions.ConnectionError as e:
             msg = f"Connection error: {str(e)}"
@@ -496,6 +522,50 @@ class ProxyManager:
             msg = f"Error: {str(e)}"
             print(f"[PROXY] {msg}")
             return False, msg
+
+    def diagnose(self) -> None:
+        """
+        Print a non-secret snapshot of what the proxy layer is actually
+        doing, so 407 issues can be debugged without guessing. Passwords
+        are masked; only length and whether the auth header is present
+        are reported.
+        """
+        print("=" * 60)
+        print("[PROXY] DIAGNOSTIC SNAPSHOT")
+        print(f"  enabled         : {self.config.enabled}")
+        print(f"  auto_detect     : {self.config.auto_detect}")
+        print(f"  proxy_url (raw) : {self.config.proxy_url!r}")
+        print(f"  auth_type       : {self.config.auth_type}")
+        print(f"  username        : {self.config.username!r}")
+        print(f"  password length : {len(self.config.password or '')}")
+        print(f"  domain          : {self.config.domain!r}")
+
+        session = self._session
+        if session is None:
+            print("  session         : not yet created")
+        else:
+            print(f"  trust_env       : {session.trust_env}")
+            masked = {}
+            for scheme, url in (session.proxies or {}).items():
+                if "@" in url and "://" in url:
+                    prot, rest = url.split("://", 1)
+                    creds, host = rest.rsplit("@", 1)
+                    masked[scheme] = f"{prot}://***:***@{host}"
+                else:
+                    masked[scheme] = url
+            print(f"  session.proxies : {masked}")
+            has_auth_hdr = 'Proxy-Authorization' in session.headers
+            print(f"  Proxy-Auth hdr  : {'present (masked)' if has_auth_hdr else 'NOT set'}")
+            print(f"  User-Agent      : {session.headers.get('User-Agent')}")
+
+        # Environment inspection — even though trust_env=False suppresses
+        # their effect at runtime, seeing them helps explain past confusion.
+        env_relevant = {k: os.environ.get(k) for k in
+                        ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy",
+                         "https_proxy", "NO_PROXY", "no_proxy")
+                        if os.environ.get(k)}
+        print(f"  env proxy vars  : {env_relevant or '(none set)'}")
+        print("=" * 60)
     
     # =========================================================================
     # Config Persistence

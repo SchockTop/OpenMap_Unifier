@@ -896,23 +896,30 @@ class ProxySettingsDialog(ctk.CTkToplevel):
     def load_current_settings(self):
         """Load current proxy settings into the form."""
         config = self.proxy_manager.config
-        
+
         if not config.enabled:
             self.var_mode.set("none")
         elif config.auto_detect:
             self.var_mode.set("auto")
         else:
             self.var_mode.set("manual")
-        
+
         self.entry_proxy_url.delete(0, "end")
         self.entry_proxy_url.insert(0, config.proxy_url)
-        
+
         auth_map = {"none": "None", "basic": "Basic", "ntlm": "NTLM"}
         self.seg_auth.set(auth_map.get(config.auth_type, "None"))
-        
+
         self.entry_username.delete(0, "end")
         self.entry_username.insert(0, config.username)
-        
+
+        # Password is not persisted to disk, but if it is still in memory from
+        # an earlier Save-in-this-session, re-populate the field so the user
+        # doesn't accidentally save an empty password (→ guaranteed HTTP 407).
+        self.entry_password.delete(0, "end")
+        if config.password:
+            self.entry_password.insert(0, config.password)
+
         self.entry_domain.delete(0, "end")
         self.entry_domain.insert(0, config.domain)
         
@@ -998,18 +1005,42 @@ class ProxySettingsDialog(ctk.CTkToplevel):
     def apply_settings(self, save=True):
         """Apply form settings to proxy manager."""
         mode = self.var_mode.get()
-        
+
         if mode == "none":
             self.proxy_manager.disable_proxy()
         elif mode == "auto":
             self.proxy_manager.auto_detect()
         else:  # manual
             auth_map = {"None": "none", "Basic": "basic", "NTLM": "ntlm"}
+            auth_type = auth_map.get(self.seg_auth.get(), "none")
+            username = self.entry_username.get()
+            password = self.entry_password.get()
+
+            # Catch a very common footgun: user saved once, reopened the
+            # dialog, didn't re-enter the password (it wasn't persisted to
+            # disk), and clicks Save. Without this guard we'd silently
+            # overwrite the still-in-memory password with "" and the next
+            # request returns 407.
+            if auth_type in ("basic", "ntlm") and username and not password:
+                existing = self.proxy_manager.config.password
+                if existing:
+                    password = existing
+                    self.lbl_status.configure(
+                        text="ℹ Using password from current session "
+                             "(field was empty)",
+                        text_color="#f39c12",
+                    )
+                else:
+                    self.lbl_status.configure(
+                        text="⚠ Password is empty — proxy will return 407",
+                        text_color="#e74c3c",
+                    )
+
             self.proxy_manager.set_manual_proxy(
                 proxy_url=self.entry_proxy_url.get(),
-                auth_type=auth_map.get(self.seg_auth.get(), "none"),
-                username=self.entry_username.get(),
-                password=self.entry_password.get(),
+                auth_type=auth_type,
+                username=username,
+                password=password,
                 domain=self.entry_domain.get()
             )
         
