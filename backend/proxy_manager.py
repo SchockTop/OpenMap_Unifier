@@ -14,7 +14,9 @@ Author: OpenMap Unifier
 
 import os
 import json
+import base64
 import urllib.request
+from urllib.parse import quote
 from typing import Optional, Dict, Tuple
 import requests
 
@@ -93,7 +95,8 @@ class ProxyManager:
         self.config = ProxyConfig()
         self._detected_proxy: Optional[str] = None
         self._session: Optional[requests.Session] = None
-        
+        self.last_detect_message: str = ""
+
         # Try to load saved config
         self.load_config()
     
@@ -126,93 +129,189 @@ class ProxyManager:
     def detect_from_registry(self) -> Optional[str]:
         """
         Directly read Windows Registry for proxy settings.
-        More reliable than urllib in some corporate environments.
+        Checks HKCU first, then HKLM (group-policy managed machines).
         """
         if not WINREG_AVAILABLE:
             return None
-            
-        try:
-            key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-            
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
-                # Check if proxy is enabled
-                try:
-                    proxy_enable, _ = winreg.QueryValueEx(key, "ProxyEnable")
+
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+        for hive, hive_name in (
+            (winreg.HKEY_CURRENT_USER, "HKCU"),
+            (winreg.HKEY_LOCAL_MACHINE, "HKLM"),
+        ):
+            try:
+                with winreg.OpenKey(hive, key_path) as key:
+                    try:
+                        proxy_enable, _ = winreg.QueryValueEx(key, "ProxyEnable")
+                    except FileNotFoundError:
+                        proxy_enable = 0
+
                     if not proxy_enable:
-                        print("[PROXY] Windows proxy is disabled in registry.")
-                        return None
-                except FileNotFoundError:
-                    return None
-                
-                # Get proxy server
-                try:
-                    proxy_server, _ = winreg.QueryValueEx(key, "ProxyServer")
-                    if proxy_server:
-                        # Handle format: "http=host:port;https=host:port" or just "host:port"
-                        if "=" in proxy_server:
-                            # Parse protocol-specific proxies
-                            for part in proxy_server.split(";"):
-                                if "=" in part:
-                                    protocol, addr = part.split("=", 1)
-                                    if protocol.lower() in ("http", "https"):
-                                        if not addr.startswith("http"):
-                                            addr = f"http://{addr}"
-                                        print(f"[PROXY] Found Windows registry proxy: {addr}")
-                                        return addr
-                        else:
-                            # Simple format
-                            if not proxy_server.startswith("http"):
-                                proxy_server = f"http://{proxy_server}"
-                            print(f"[PROXY] Found Windows registry proxy: {proxy_server}")
-                            return proxy_server
-                except FileNotFoundError:
-                    pass
-                    
-        except Exception as e:
-            print(f"[PROXY] Registry read error: {e}")
-        
+                        continue
+
+                    try:
+                        proxy_server, _ = winreg.QueryValueEx(key, "ProxyServer")
+                    except FileNotFoundError:
+                        continue
+                    if not proxy_server:
+                        continue
+
+                    if "=" in proxy_server:
+                        # "http=host:port;https=host:port"
+                        for part in proxy_server.split(";"):
+                            if "=" in part:
+                                protocol, addr = part.split("=", 1)
+                                if protocol.lower() in ("http", "https"):
+                                    if not addr.startswith("http"):
+                                        addr = f"http://{addr}"
+                                    print(f"[PROXY] Found Windows registry proxy ({hive_name}): {addr}")
+                                    return addr
+                    else:
+                        if not proxy_server.startswith("http"):
+                            proxy_server = f"http://{proxy_server}"
+                        print(f"[PROXY] Found Windows registry proxy ({hive_name}): {proxy_server}")
+                        return proxy_server
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                print(f"[PROXY] Registry read error ({hive_name}): {e}")
+
         return None
+
+    def detect_pac_url(self) -> Optional[str]:
+        """
+        Read the Windows 'AutoConfigURL' (PAC file) value from the registry.
+        Many corporate networks configure proxies via PAC — static ProxyServer
+        is often empty in that case, which is why detect_from_registry() misses
+        them and auto-detect falsely reports 'direct connection'.
+        """
+        if not WINREG_AVAILABLE:
+            return None
+
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+        for hive, hive_name in (
+            (winreg.HKEY_CURRENT_USER, "HKCU"),
+            (winreg.HKEY_LOCAL_MACHINE, "HKLM"),
+        ):
+            try:
+                with winreg.OpenKey(hive, key_path) as key:
+                    try:
+                        pac_url, _ = winreg.QueryValueEx(key, "AutoConfigURL")
+                    except FileNotFoundError:
+                        continue
+                    if pac_url:
+                        print(f"[PROXY] Found PAC URL in {hive_name}: {pac_url}")
+                        return pac_url
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                print(f"[PROXY] Registry PAC read error ({hive_name}): {e}")
+        return None
+
+    def _resolve_pac(self, pac_url: str, target_url: str = "https://overpass-api.de/") -> Optional[str]:
+        """
+        Best-effort PAC resolution. Uses pypac if installed; otherwise logs a
+        helpful message pointing the user to manual configuration.
+        """
+        try:
+            from pypac import PACSession, get_pac  # type: ignore
+            pac = get_pac(url=pac_url)
+            if pac is None:
+                return None
+            proxies = pac.find_proxy_for_url(target_url, "overpass-api.de")
+            # PAC returns strings like "PROXY host:port; DIRECT" — take first PROXY entry
+            for entry in (proxies or "").split(";"):
+                entry = entry.strip()
+                if entry.upper().startswith("PROXY "):
+                    addr = entry.split(None, 1)[1].strip()
+                    if not addr.startswith("http"):
+                        addr = f"http://{addr}"
+                    print(f"[PROXY] PAC resolved to: {addr}")
+                    return addr
+            return None
+        except ImportError:
+            print("[PROXY] PAC file configured but 'pypac' is not installed. "
+                  "Install it with: pip install pypac  — or enter the proxy "
+                  "manually in Proxy Settings.")
+            return None
+        except Exception as e:
+            print(f"[PROXY] PAC resolution failed: {e}")
+            return None
     
     def auto_detect(self) -> bool:
         """
         Attempt to auto-detect proxy settings from all sources.
         Returns True if a proxy was detected.
+
+        If nothing is detected, any previously configured manual proxy is
+        kept intact — we only log a warning rather than wiping the user's
+        settings.
         """
         print("[PROXY] Starting auto-detection...")
-        
+        self.last_detect_message = ""
+
         # Priority 1: Environment variables
         proxy = self.detect_from_environment()
         if proxy:
-            self._detected_proxy = proxy
-            self.config.proxy_url = proxy
-            self.config.auto_detect = True
-            self.config.enabled = True
+            self._apply_detected(proxy)
             return True
-        
-        # Priority 2: Windows Registry (more reliable)
+
+        # Priority 2: Windows Registry — static proxy
         proxy = self.detect_from_registry()
         if proxy:
-            self._detected_proxy = proxy
-            self.config.proxy_url = proxy
-            self.config.auto_detect = True
-            self.config.enabled = True
+            self._apply_detected(proxy)
             return True
-        
-        # Priority 3: urllib (fallback)
+
+        # Priority 3: Windows PAC file (AutoConfigURL) — common in corp setups
+        pac_url = self.detect_pac_url()
+        if pac_url:
+            resolved = self._resolve_pac(pac_url)
+            if resolved:
+                self._apply_detected(resolved)
+                return True
+            # PAC exists but we couldn't resolve it — don't disable a working
+            # manual config, just tell the user.
+            self.last_detect_message = (
+                f"System uses PAC file ({pac_url}) but it couldn't be "
+                f"resolved automatically. Install 'pypac' or enter the "
+                f"proxy manually."
+            )
+            print(f"[PROXY] {self.last_detect_message}")
+            self._invalidate_session()
+            return False
+
+        # Priority 4: urllib (fallback — reads Windows settings on Win)
         proxies = self.detect_from_urllib()
         if proxies:
-            # Prefer HTTPS, then HTTP
             proxy = proxies.get('https') or proxies.get('http')
             if proxy:
-                self._detected_proxy = proxy
-                self.config.proxy_url = proxy
-                self.config.auto_detect = True
-                self.config.enabled = True
+                self._apply_detected(proxy)
                 return True
-        
-        print("[PROXY] No proxy detected. Using direct connection.")
-        self.config.enabled = False
+
+        # Nothing detected — preserve any existing manual config
+        if self.config.enabled and self.config.proxy_url and not self.config.auto_detect:
+            self.last_detect_message = (
+                "Auto-detect found no proxy. Keeping your saved manual "
+                "configuration."
+            )
+            print(f"[PROXY] {self.last_detect_message}")
+        else:
+            self.last_detect_message = "No proxy detected. Using direct connection."
+            print(f"[PROXY] {self.last_detect_message}")
+            self.config.enabled = False
+        self._invalidate_session()
         return False
+
+    def _apply_detected(self, proxy: str) -> None:
+        self._detected_proxy = proxy
+        self.config.proxy_url = proxy
+        self.config.auto_detect = True
+        self.config.enabled = True
+        self.last_detect_message = f"Detected proxy: {proxy}"
+        self._invalidate_session()
+
+    def _invalidate_session(self) -> None:
+        self._session = None
     
     # =========================================================================
     # Manual Configuration
@@ -253,6 +352,26 @@ class ProxyManager:
     # Session Management
     # =========================================================================
     
+    @staticmethod
+    def _build_proxy_url(proxy_url: str, username: str, password: str) -> str:
+        """
+        Embed credentials into a proxy URL, URL-encoding them so passwords
+        containing @ : / # % ! ? & etc. do not break URL parsing — a common
+        root cause of HTTP 407 Proxy Authentication Required.
+        """
+        if not username:
+            return proxy_url
+        if "://" not in proxy_url:
+            proxy_url = "http://" + proxy_url
+        protocol, rest = proxy_url.split("://", 1)
+        # Strip any credentials the user may have pasted into the URL already
+        if "@" in rest:
+            rest = rest.rsplit("@", 1)[1]
+        # quote() with empty safe=... percent-encodes every reserved char
+        user_enc = quote(username, safe="")
+        pass_enc = quote(password or "", safe="")
+        return f"{protocol}://{user_enc}:{pass_enc}@{rest}"
+
     def get_session(self) -> requests.Session:
         """
         Get a configured requests Session with proxy and auth settings.
@@ -260,30 +379,33 @@ class ProxyManager:
         """
         if self._session is not None:
             return self._session
-        
+
         session = requests.Session()
-        
+
         # Set User-Agent
         session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenMapUnifier/1.0'
-        
+
         if self.config.enabled and self.config.proxy_url:
-            # Configure proxies
             proxy_url = self.config.proxy_url
-            
-            # Add basic auth to URL if needed
+
             if self.config.auth_type == "basic" and self.config.username:
-                # Insert credentials into URL: http://user:pass@proxy:port
-                if "://" in proxy_url:
-                    protocol, rest = proxy_url.split("://", 1)
-                    creds = f"{self.config.username}:{self.config.password}"
-                    proxy_url = f"{protocol}://{creds}@{rest}"
-            
+                # URL-encode credentials so special characters don't break
+                # the proxy URL parser (root cause of most 407 errors).
+                proxy_url = self._build_proxy_url(
+                    proxy_url, self.config.username, self.config.password
+                )
+                # Also pre-set Proxy-Authorization for plain HTTP proxies.
+                # (For HTTPS, requests uses the URL creds during CONNECT.)
+                token = base64.b64encode(
+                    f"{self.config.username}:{self.config.password}".encode("utf-8")
+                ).decode("ascii")
+                session.headers['Proxy-Authorization'] = f"Basic {token}"
+
             session.proxies = {
                 'http': proxy_url,
                 'https': proxy_url,
             }
-            
-            # Configure NTLM auth if needed
+
             if self.config.auth_type == "ntlm" and self.config.username:
                 if NTLM_AVAILABLE:
                     ntlm_user = self.config.username
@@ -291,13 +413,20 @@ class ProxyManager:
                         ntlm_user = f"{self.config.domain}\\{self.config.username}"
                     session.auth = HttpNtlmAuth(ntlm_user, self.config.password)
                     print(f"[PROXY] NTLM auth configured for user: {ntlm_user}")
+                    print("[PROXY] NOTE: NTLM over HTTPS proxies via plain requests "
+                          "is not reliably supported. If you still get HTTP 407, "
+                          "switch the proxy to Basic auth or run a local NTLM "
+                          "relay such as cntlm.")
                 else:
                     print("[PROXY] WARNING: NTLM requested but requests-ntlm not installed!")
-            
-            print(f"[PROXY] Session configured with proxy: {self.config.proxy_url}")
+
+            # Mask credentials in the log line
+            safe_log = self.config.proxy_url
+            print(f"[PROXY] Session configured with proxy: {safe_log} "
+                  f"(auth: {self.config.auth_type})")
         else:
             print("[PROXY] Session configured for direct connection (no proxy).")
-        
+
         self._session = session
         return session
     
@@ -308,16 +437,13 @@ class ProxyManager:
         """
         if not self.config.enabled or not self.config.proxy_url:
             return None
-        
+
         proxy_url = self.config.proxy_url
-        
-        # Add basic auth credentials if needed
         if self.config.auth_type == "basic" and self.config.username:
-            if "://" in proxy_url:
-                protocol, rest = proxy_url.split("://", 1)
-                creds = f"{self.config.username}:{self.config.password}"
-                proxy_url = f"{protocol}://{creds}@{rest}"
-        
+            proxy_url = self._build_proxy_url(
+                proxy_url, self.config.username, self.config.password
+            )
+
         return {
             'http': proxy_url,
             'https': proxy_url,

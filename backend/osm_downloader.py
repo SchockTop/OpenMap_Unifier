@@ -126,6 +126,8 @@ OVERPASS_MIRRORS = [
 # HTTP status codes that should trigger a retry (either same endpoint or mirror).
 # 406 = Not Acceptable (usually missing/unsupported Accept header upstream)
 # 429 = Too Many Requests, 502/503/504 = transient gateway issues
+# 407 is intentionally NOT retryable — it means the local proxy rejected our
+# credentials, so hitting another Overpass mirror won't help.
 RETRYABLE_STATUS = {406, 408, 429, 500, 502, 503, 504}
 
 # Supported output formats.
@@ -157,17 +159,22 @@ class OSMDownloader:
     # ------------------------------------------------------------------
 
     def _get_session(self):
-        if self._session is None:
-            if self.proxy_manager:
-                self._session = self.proxy_manager.get_session()
-            else:
-                self._session = requests.Session()
-            # Always enforce a standards-compliant User-Agent. Some Overpass
-            # mirrors / upstream CDNs reject requests with missing or unusual
-            # User-Agent strings (seen as HTTP 406 or 403).
-            self._session.headers.update({
-                "User-Agent": "OpenMapUnifier/1.0 (+https://github.com/schocktop/openmap_unifier)",
-            })
+        # Always re-fetch from the proxy manager so that proxy settings changed
+        # in the UI (auto-detect, manual update, disable) take effect on the
+        # next download without needing an app restart.
+        if self.proxy_manager:
+            session = self.proxy_manager.get_session()
+            if session is not self._session:
+                self._session = session
+        elif self._session is None:
+            self._session = requests.Session()
+
+        # Always enforce a standards-compliant User-Agent. Some Overpass
+        # mirrors / upstream CDNs reject requests with missing or unusual
+        # User-Agent strings (seen as HTTP 406 or 403).
+        self._session.headers.update({
+            "User-Agent": "OpenMapUnifier/1.0 (+https://github.com/schocktop/openmap_unifier)",
+        })
         return self._session
 
     @staticmethod
@@ -577,6 +584,9 @@ class OSMDownloader:
                 403: "Blocked by server — check proxy / User-Agent",
                 404: "Endpoint not found",
                 406: "Server rejected Accept header — all Overpass mirrors failed",
+                407: ("Proxy rejected credentials — open Proxy Settings, "
+                      "re-enter username/password (NTLM users: try Basic "
+                      "auth or run a local cntlm relay)"),
                 413: "Query too large — reduce area or buffer",
                 429: "Rate-limited — wait a moment and retry",
                 504: "Server timed out — try a smaller area",
