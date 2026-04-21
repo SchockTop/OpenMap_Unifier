@@ -952,17 +952,33 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         """Run auto-detection."""
         self.lbl_status.configure(text="Detecting proxy settings...", text_color="yellow")
         self.update()
-        
+
         found = self.proxy_manager.auto_detect()
-        
+        msg = getattr(self.proxy_manager, "last_detect_message", "") or ""
+
         if found:
             self.entry_proxy_url.delete(0, "end")
             self.entry_proxy_url.insert(0, self.proxy_manager.config.proxy_url)
-            self.lbl_status.configure(text=f"✓ Detected: {self.proxy_manager.config.proxy_url}", text_color="#27ae60")
+            self.lbl_status.configure(
+                text=f"✓ Detected: {self.proxy_manager.config.proxy_url}",
+                text_color="#27ae60",
+            )
             self.var_mode.set("auto")
         else:
-            self.lbl_status.configure(text="No proxy detected. Using direct connection.", text_color="gray60")
-            self.var_mode.set("none")
+            # Preserve an existing manual config if one is still active
+            if self.proxy_manager.config.enabled and self.proxy_manager.config.proxy_url:
+                self.lbl_status.configure(
+                    text=f"⚠ {msg or 'Auto-detect failed. Using saved manual proxy.'}",
+                    text_color="#f39c12",
+                )
+                self.var_mode.set("manual")
+            else:
+                self.lbl_status.configure(
+                    text=msg or "No proxy detected. Using direct connection.",
+                    text_color="gray60",
+                )
+                self.var_mode.set("none")
+        self.on_mode_change()
     
     def do_test_connection(self):
         """Test the current connection."""
