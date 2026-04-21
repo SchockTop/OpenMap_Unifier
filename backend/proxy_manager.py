@@ -89,6 +89,9 @@ class ProxyManager:
     
     CONFIG_FILE = "proxy_config.json"
     TEST_URL = "https://geoservices.bayern.de"
+    # Test against the OSM endpoint too — some corporate proxies accept one
+    # destination and return 407 for others (per-URL ACLs).
+    TEST_URL_OSM = "https://overpass-api.de/api/status"
     
     def __init__(self, config_dir: str = "."):
         self.config_dir = config_dir
@@ -474,34 +477,38 @@ class ProxyManager:
     
     def test_connection(self, url: str = None) -> Tuple[bool, str]:
         """
-        Test if the current proxy configuration works.
-        
-        Args:
-            url: URL to test against (defaults to TEST_URL)
-            
-        Returns:
-            Tuple of (success: bool, message: str)
+        Test if the current proxy configuration works against the OSM
+        endpoint (the one the downloader actually uses), not just against
+        a generic HTTPS target. Corporate proxies can have per-URL ACLs
+        that make a generic test succeed while OSM still fails with 407.
         """
-        url = url or self.TEST_URL
-        
+        url = url or self.TEST_URL_OSM
+
         try:
             session = self.get_session()
-            
+
             print(f"[PROXY] Testing connection to {url}...")
             response = session.get(url, timeout=15)
-            
-            if response.status_code == 200:
+
+            if response.status_code < 400:
                 msg = f"Connection successful! Status: {response.status_code}"
                 print(f"[PROXY] {msg}")
                 return True, msg
+            elif response.status_code == 407:
+                msg = ("HTTP 407: Proxy rejected credentials. Check username, "
+                       "password, and auth type. See console for diagnostics.")
+                print(f"[PROXY] {msg}")
+                self.diagnose()
+                return False, msg
             else:
                 msg = f"Connection returned status {response.status_code}"
                 print(f"[PROXY] {msg}")
                 return False, msg
-                
+
         except requests.exceptions.ProxyError as e:
             msg = f"Proxy error: {str(e)}"
             print(f"[PROXY] {msg}")
+            self.diagnose()
             return False, msg
         except requests.exceptions.ConnectionError as e:
             msg = f"Connection error: {str(e)}"
@@ -515,6 +522,50 @@ class ProxyManager:
             msg = f"Error: {str(e)}"
             print(f"[PROXY] {msg}")
             return False, msg
+
+    def diagnose(self) -> None:
+        """
+        Print a non-secret snapshot of what the proxy layer is actually
+        doing, so 407 issues can be debugged without guessing. Passwords
+        are masked; only length and whether the auth header is present
+        are reported.
+        """
+        print("=" * 60)
+        print("[PROXY] DIAGNOSTIC SNAPSHOT")
+        print(f"  enabled         : {self.config.enabled}")
+        print(f"  auto_detect     : {self.config.auto_detect}")
+        print(f"  proxy_url (raw) : {self.config.proxy_url!r}")
+        print(f"  auth_type       : {self.config.auth_type}")
+        print(f"  username        : {self.config.username!r}")
+        print(f"  password length : {len(self.config.password or '')}")
+        print(f"  domain          : {self.config.domain!r}")
+
+        session = self._session
+        if session is None:
+            print("  session         : not yet created")
+        else:
+            print(f"  trust_env       : {session.trust_env}")
+            masked = {}
+            for scheme, url in (session.proxies or {}).items():
+                if "@" in url and "://" in url:
+                    prot, rest = url.split("://", 1)
+                    creds, host = rest.rsplit("@", 1)
+                    masked[scheme] = f"{prot}://***:***@{host}"
+                else:
+                    masked[scheme] = url
+            print(f"  session.proxies : {masked}")
+            has_auth_hdr = 'Proxy-Authorization' in session.headers
+            print(f"  Proxy-Auth hdr  : {'present (masked)' if has_auth_hdr else 'NOT set'}")
+            print(f"  User-Agent      : {session.headers.get('User-Agent')}")
+
+        # Environment inspection — even though trust_env=False suppresses
+        # their effect at runtime, seeing them helps explain past confusion.
+        env_relevant = {k: os.environ.get(k) for k in
+                        ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy",
+                         "https_proxy", "NO_PROXY", "no_proxy")
+                        if os.environ.get(k)}
+        print(f"  env proxy vars  : {env_relevant or '(none set)'}")
+        print("=" * 60)
     
     # =========================================================================
     # Config Persistence

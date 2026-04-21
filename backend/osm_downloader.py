@@ -595,6 +595,13 @@ class OSMDownloader:
             msg = f"HTTP {code}: {hint}{detail}"
             cb(0, msg)
             print(f"[OSM] {layer_name}: {msg}")
+            # On 407 print a non-secret diagnostic snapshot so the user can
+            # see exactly what proxy/auth/env state was in effect.
+            if code == 407 and self.proxy_manager:
+                try:
+                    self.proxy_manager.diagnose()
+                except Exception:
+                    pass
             return False, msg
         except requests.exceptions.RequestException as e:
             msg = f"Network error: {e}"
