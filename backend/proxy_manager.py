@@ -353,16 +353,28 @@ class ProxyManager:
     # =========================================================================
     
     @staticmethod
+    def _normalize_proxy_url(proxy_url: str) -> str:
+        """
+        Normalize a proxy URL: add scheme if missing, strip whitespace and
+        any trailing slash, leave the host:port part untouched.
+        """
+        if not proxy_url:
+            return proxy_url
+        proxy_url = proxy_url.strip().rstrip("/")
+        if "://" not in proxy_url:
+            proxy_url = "http://" + proxy_url
+        return proxy_url
+
+    @staticmethod
     def _build_proxy_url(proxy_url: str, username: str, password: str) -> str:
         """
         Embed credentials into a proxy URL, URL-encoding them so passwords
         containing @ : / # % ! ? & etc. do not break URL parsing — a common
         root cause of HTTP 407 Proxy Authentication Required.
         """
+        proxy_url = ProxyManager._normalize_proxy_url(proxy_url)
         if not username:
             return proxy_url
-        if "://" not in proxy_url:
-            proxy_url = "http://" + proxy_url
         protocol, rest = proxy_url.split("://", 1)
         # Strip any credentials the user may have pasted into the URL already
         if "@" in rest:
@@ -382,17 +394,25 @@ class ProxyManager:
 
         session = requests.Session()
 
+        # CRITICAL: disable requests' automatic reading of proxy settings
+        # from environment variables (HTTP_PROXY/HTTPS_PROXY) and .netrc.
+        # Otherwise an old/wrong proxy URL or stale credentials in the user's
+        # shell environment silently override session.proxies and cause 407
+        # even though our configured credentials are correct.
+        session.trust_env = False
+
         # Set User-Agent
         session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenMapUnifier/1.0'
 
         if self.config.enabled and self.config.proxy_url:
-            proxy_url = self.config.proxy_url
+            base_url = self._normalize_proxy_url(self.config.proxy_url)
+            proxy_url = base_url
 
             if self.config.auth_type == "basic" and self.config.username:
                 # URL-encode credentials so special characters don't break
                 # the proxy URL parser (root cause of most 407 errors).
                 proxy_url = self._build_proxy_url(
-                    proxy_url, self.config.username, self.config.password
+                    base_url, self.config.username, self.config.password
                 )
                 # Also pre-set Proxy-Authorization for plain HTTP proxies.
                 # (For HTTPS, requests uses the URL creds during CONNECT.)
@@ -421,9 +441,8 @@ class ProxyManager:
                     print("[PROXY] WARNING: NTLM requested but requests-ntlm not installed!")
 
             # Mask credentials in the log line
-            safe_log = self.config.proxy_url
-            print(f"[PROXY] Session configured with proxy: {safe_log} "
-                  f"(auth: {self.config.auth_type})")
+            print(f"[PROXY] Session configured with proxy: {base_url} "
+                  f"(auth: {self.config.auth_type}, trust_env=False)")
         else:
             print("[PROXY] Session configured for direct connection (no proxy).")
 
@@ -438,7 +457,7 @@ class ProxyManager:
         if not self.config.enabled or not self.config.proxy_url:
             return None
 
-        proxy_url = self.config.proxy_url
+        proxy_url = self._normalize_proxy_url(self.config.proxy_url)
         if self.config.auth_type == "basic" and self.config.username:
             proxy_url = self._build_proxy_url(
                 proxy_url, self.config.username, self.config.password
