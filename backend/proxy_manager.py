@@ -436,15 +436,16 @@ class ProxyManager:
             if self.config.auth_type == "basic" and self.config.username:
                 # URL-encode credentials so special characters don't break
                 # the proxy URL parser (root cause of most 407 errors).
+                # For HTTPS targets, urllib3 extracts these and sends a
+                # correct Proxy-Authorization header on the CONNECT tunnel.
+                # We deliberately do NOT also set session.headers
+                # ['Proxy-Authorization'] — for HTTPS it's useless (sits
+                # inside the encrypted tunnel, proxy never sees it) and
+                # worse, it leaks to the destination server as an extra
+                # header, which some CDNs treat as an auth challenge.
                 proxy_url = self._build_proxy_url(
                     base_url, self.config.username, self.config.password
                 )
-                # Also pre-set Proxy-Authorization for plain HTTP proxies.
-                # (For HTTPS, requests uses the URL creds during CONNECT.)
-                token = base64.b64encode(
-                    f"{self.config.username}:{self.config.password}".encode("utf-8")
-                ).decode("ascii")
-                session.headers['Proxy-Authorization'] = f"Basic {token}"
 
                 # Only disable env-proxy fallback when we have an explicit
                 # manual proxy with credentials. Stale HTTP_PROXY env vars
