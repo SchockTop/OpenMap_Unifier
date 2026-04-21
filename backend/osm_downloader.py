@@ -159,17 +159,22 @@ class OSMDownloader:
     # ------------------------------------------------------------------
 
     def _get_session(self):
-        if self._session is None:
-            if self.proxy_manager:
-                self._session = self.proxy_manager.get_session()
-            else:
-                self._session = requests.Session()
-            # Always enforce a standards-compliant User-Agent. Some Overpass
-            # mirrors / upstream CDNs reject requests with missing or unusual
-            # User-Agent strings (seen as HTTP 406 or 403).
-            self._session.headers.update({
-                "User-Agent": "OpenMapUnifier/1.0 (+https://github.com/schocktop/openmap_unifier)",
-            })
+        # Always re-fetch from the proxy manager so that proxy settings changed
+        # in the UI (auto-detect, manual update, disable) take effect on the
+        # next download without needing an app restart.
+        if self.proxy_manager:
+            session = self.proxy_manager.get_session()
+            if session is not self._session:
+                self._session = session
+        elif self._session is None:
+            self._session = requests.Session()
+
+        # Always enforce a standards-compliant User-Agent. Some Overpass
+        # mirrors / upstream CDNs reject requests with missing or unusual
+        # User-Agent strings (seen as HTTP 406 or 403).
+        self._session.headers.update({
+            "User-Agent": "OpenMapUnifier/1.0 (+https://github.com/schocktop/openmap_unifier)",
+        })
         return self._session
 
     @staticmethod
