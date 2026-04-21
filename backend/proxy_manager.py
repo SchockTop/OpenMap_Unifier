@@ -397,13 +397,6 @@ class ProxyManager:
 
         session = requests.Session()
 
-        # CRITICAL: disable requests' automatic reading of proxy settings
-        # from environment variables (HTTP_PROXY/HTTPS_PROXY) and .netrc.
-        # Otherwise an old/wrong proxy URL or stale credentials in the user's
-        # shell environment silently override session.proxies and cause 407
-        # even though our configured credentials are correct.
-        session.trust_env = False
-
         # Set User-Agent
         session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenMapUnifier/1.0'
 
@@ -424,6 +417,15 @@ class ProxyManager:
                 ).decode("ascii")
                 session.headers['Proxy-Authorization'] = f"Basic {token}"
 
+                # Only disable env-proxy fallback when we have an explicit
+                # manual proxy with credentials. Stale HTTP_PROXY env vars
+                # would otherwise override our creds and cause 407.
+                # For auto-detect / no-proxy modes we keep trust_env=True
+                # so env vars and .netrc still work as a safety net
+                # (preserves pre-existing working setups for relief /
+                # satellite downloads etc.).
+                session.trust_env = False
+
             session.proxies = {
                 'http': proxy_url,
                 'https': proxy_url,
@@ -435,6 +437,9 @@ class ProxyManager:
                     if self.config.domain:
                         ntlm_user = f"{self.config.domain}\\{self.config.username}"
                     session.auth = HttpNtlmAuth(ntlm_user, self.config.password)
+                    # Same reasoning as Basic: block env overrides when we
+                    # have explicit proxy credentials.
+                    session.trust_env = False
                     print(f"[PROXY] NTLM auth configured for user: {ntlm_user}")
                     print("[PROXY] NOTE: NTLM over HTTPS proxies via plain requests "
                           "is not reliably supported. If you still get HTTP 407, "
@@ -445,9 +450,10 @@ class ProxyManager:
 
             # Mask credentials in the log line
             print(f"[PROXY] Session configured with proxy: {base_url} "
-                  f"(auth: {self.config.auth_type}, trust_env=False)")
+                  f"(auth: {self.config.auth_type}, trust_env={session.trust_env})")
         else:
-            print("[PROXY] Session configured for direct connection (no proxy).")
+            print("[PROXY] Session configured for direct connection "
+                  "(no proxy, trust_env=True for env fallback).")
 
         self._session = session
         return session
