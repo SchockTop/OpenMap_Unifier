@@ -48,7 +48,10 @@ class ProxyConfig:
         self.password: str = ""
         self.domain: str = ""  # For NTLM (e.g., "COMPANY")
         self.no_proxy: str = "localhost,127.0.0.1"  # Comma-separated bypass list
-        
+        # SSL / TLS — unified across all downloaders
+        self.ssl_verify: bool = True          # False = skip verification (dev only)
+        self.ca_bundle_path: str = ""         # Absolute path to .pem, "" = system default
+
     def to_dict(self) -> dict:
         """Serialize config (excludes password for security)."""
         return {
@@ -59,9 +62,11 @@ class ProxyConfig:
             "username": self.username,
             "domain": self.domain,
             "no_proxy": self.no_proxy,
+            "ssl_verify": self.ssl_verify,
+            "ca_bundle_path": self.ca_bundle_path,
             # Password NOT saved for security
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> 'ProxyConfig':
         """Deserialize config."""
@@ -73,6 +78,8 @@ class ProxyConfig:
         config.username = data.get("username", "")
         config.domain = data.get("domain", "")
         config.no_proxy = data.get("no_proxy", "localhost,127.0.0.1")
+        config.ssl_verify = data.get("ssl_verify", True)
+        config.ca_bundle_path = data.get("ca_bundle_path", "")
         return config
 
 
@@ -350,6 +357,13 @@ class ProxyManager:
         self.config.enabled = False
         self._session = None
         print("[PROXY] Proxy disabled. Using direct connection.")
+
+    def set_ssl(self, ssl_verify: bool, ca_bundle_path: str = ""):
+        """Update SSL settings. Invalidates cached session."""
+        self.config.ssl_verify = ssl_verify
+        self.config.ca_bundle_path = ca_bundle_path or ""
+        self._session = None
+        print(f"[PROXY] SSL updated: verify={ssl_verify}, ca_bundle={ca_bundle_path or '(system default)'}")
     
     # =========================================================================
     # Session Management
@@ -399,6 +413,21 @@ class ProxyManager:
 
         # Set User-Agent
         session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenMapUnifier/1.0'
+
+        # SSL verify / CA bundle — applies regardless of proxy state.
+        # Priority: explicit CA bundle path > ssl_verify toggle > system default.
+        if self.config.ca_bundle_path and os.path.exists(self.config.ca_bundle_path):
+            session.verify = self.config.ca_bundle_path
+            print(f"[PROXY] Using custom CA bundle: {self.config.ca_bundle_path}")
+        elif not self.config.ssl_verify:
+            session.verify = False
+            # Suppress noisy InsecureRequestWarning when user opted out.
+            try:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
+            print("[PROXY] SSL verification DISABLED (ssl_verify=False)")
 
         if self.config.enabled and self.config.proxy_url:
             base_url = self._normalize_proxy_url(self.config.proxy_url)
@@ -481,6 +510,66 @@ class ProxyManager:
     # Connection Testing
     # =========================================================================
     
+    # Public targets for the multi-endpoint test — covers both data sources.
+    TEST_TARGETS = {
+        "Bayern (geoservices.bayern.de)": "https://geoservices.bayern.de",
+        "OSM (overpass-api.de)": "https://overpass-api.de/api/status",
+    }
+
+    @staticmethod
+    def classify_error(exc: Exception) -> Tuple[str, str]:
+        """
+        Return (short_code, user_message) for a requests/network exception.
+
+        short_code in: PROXY_AUTH | SSL | PROXY | TIMEOUT | DNS | HTTP | OTHER
+        """
+        # Inspect HTTP 407 first — it can appear as HTTPError or inside ProxyError
+        try:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+        except Exception:
+            status = None
+        msg_text = str(exc).lower()
+
+        if status == 407 or "407" in msg_text or "proxy authentication required" in msg_text:
+            return ("PROXY_AUTH",
+                    "Proxy rejected credentials (407). Check username/password/auth type (Basic vs NTLM).")
+
+        if isinstance(exc, requests.exceptions.SSLError):
+            return ("SSL",
+                    "SSL error — set a CA bundle (.pem) in Proxy Settings, or disable SSL verify if your proxy inspects HTTPS.")
+
+        if isinstance(exc, requests.exceptions.ProxyError):
+            return ("PROXY",
+                    "Proxy connection failed — check the proxy URL is reachable and the host/port are correct.")
+
+        if isinstance(exc, requests.exceptions.Timeout):
+            return ("TIMEOUT",
+                    "Timed out — the proxy or target may be slow, blocking, or requires authentication.")
+
+        if isinstance(exc, requests.exceptions.ConnectionError):
+            return ("DNS",
+                    "Cannot connect — check network, DNS, and proxy settings.")
+
+        if isinstance(exc, requests.exceptions.HTTPError):
+            return ("HTTP", f"HTTP {status}: {exc}")
+
+        return ("OTHER", str(exc) or exc.__class__.__name__)
+
+    def test_connections(self) -> Dict[str, Tuple[bool, str]]:
+        """Test all known targets; return {label: (ok, message)}."""
+        return {label: self._test_one(url) for label, url in self.TEST_TARGETS.items()}
+
+    def _test_one(self, url: str) -> Tuple[bool, str]:
+        try:
+            session = self.get_session()
+            response = session.get(url, timeout=10)
+            if 200 <= response.status_code < 400:
+                return True, f"OK (HTTP {response.status_code})"
+            return False, f"HTTP {response.status_code}"
+        except Exception as e:
+            code, msg = self.classify_error(e)
+            return False, f"[{code}] {msg}"
+
     def test_connection(self, url: str = None) -> Tuple[bool, str]:
         """
         Test if the current proxy configuration works against the OSM
@@ -511,23 +600,14 @@ class ProxyManager:
                 print(f"[PROXY] {msg}")
                 return False, msg
 
-        except requests.exceptions.ProxyError as e:
-            msg = f"Proxy error: {str(e)}"
-            print(f"[PROXY] {msg}")
-            self.diagnose()
-            return False, msg
-        except requests.exceptions.ConnectionError as e:
-            msg = f"Connection error: {str(e)}"
-            print(f"[PROXY] {msg}")
-            return False, msg
-        except requests.exceptions.Timeout:
-            msg = "Connection timed out (15s)"
-            print(f"[PROXY] {msg}")
-            return False, msg
         except Exception as e:
-            msg = f"Error: {str(e)}"
-            print(f"[PROXY] {msg}")
-            return False, msg
+            code, msg = self.classify_error(e)
+            print(f"[PROXY] [{code}] {msg}")
+            # PROXY_AUTH is the saga we've been chasing — dump diagnostics
+            # automatically so the user sees what was actually sent.
+            if code == "PROXY_AUTH":
+                self.diagnose()
+            return False, f"[{code}] {msg}"
 
     def diagnose(self) -> None:
         """
@@ -545,12 +625,15 @@ class ProxyManager:
         print(f"  username        : {self.config.username!r}")
         print(f"  password length : {len(self.config.password or '')}")
         print(f"  domain          : {self.config.domain!r}")
+        print(f"  ssl_verify      : {self.config.ssl_verify}")
+        print(f"  ca_bundle_path  : {self.config.ca_bundle_path or '(system CAs)'}")
 
         session = self._session
         if session is None:
             print("  session         : not yet created")
         else:
             print(f"  trust_env       : {session.trust_env}")
+            print(f"  session.verify  : {session.verify}")
             masked = {}
             for scheme, url in (session.proxies or {}).items():
                 if "@" in url and "://" in url:
@@ -612,6 +695,8 @@ class ProxyManager:
             "auth_type": self.config.auth_type,
             "username": self.config.username if self.config.auth_type != "none" else "",
             "ntlm_available": NTLM_AVAILABLE,
+            "ssl_verify": self.config.ssl_verify,
+            "ca_bundle_path": self.config.ca_bundle_path,
         }
     
     @staticmethod
