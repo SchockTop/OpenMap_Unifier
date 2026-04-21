@@ -126,6 +126,8 @@ OVERPASS_MIRRORS = [
 # HTTP status codes that should trigger a retry (either same endpoint or mirror).
 # 406 = Not Acceptable (usually missing/unsupported Accept header upstream)
 # 429 = Too Many Requests, 502/503/504 = transient gateway issues
+# 407 is intentionally NOT retryable — it means the local proxy rejected our
+# credentials, so hitting another Overpass mirror won't help.
 RETRYABLE_STATUS = {406, 408, 429, 500, 502, 503, 504}
 
 # Supported output formats.
@@ -577,6 +579,9 @@ class OSMDownloader:
                 403: "Blocked by server — check proxy / User-Agent",
                 404: "Endpoint not found",
                 406: "Server rejected Accept header — all Overpass mirrors failed",
+                407: ("Proxy rejected credentials — open Proxy Settings, "
+                      "re-enter username/password (NTLM users: try Basic "
+                      "auth or run a local cntlm relay)"),
                 413: "Query too large — reduce area or buffer",
                 429: "Rate-limited — wait a moment and retry",
                 504: "Server timed out — try a smaller area",

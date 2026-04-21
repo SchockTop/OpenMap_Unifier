@@ -14,7 +14,9 @@ Author: OpenMap Unifier
 
 import os
 import json
+import base64
 import urllib.request
+from urllib.parse import quote
 from typing import Optional, Dict, Tuple
 import requests
 
@@ -253,6 +255,26 @@ class ProxyManager:
     # Session Management
     # =========================================================================
     
+    @staticmethod
+    def _build_proxy_url(proxy_url: str, username: str, password: str) -> str:
+        """
+        Embed credentials into a proxy URL, URL-encoding them so passwords
+        containing @ : / # % ! ? & etc. do not break URL parsing — a common
+        root cause of HTTP 407 Proxy Authentication Required.
+        """
+        if not username:
+            return proxy_url
+        if "://" not in proxy_url:
+            proxy_url = "http://" + proxy_url
+        protocol, rest = proxy_url.split("://", 1)
+        # Strip any credentials the user may have pasted into the URL already
+        if "@" in rest:
+            rest = rest.rsplit("@", 1)[1]
+        # quote() with empty safe=... percent-encodes every reserved char
+        user_enc = quote(username, safe="")
+        pass_enc = quote(password or "", safe="")
+        return f"{protocol}://{user_enc}:{pass_enc}@{rest}"
+
     def get_session(self) -> requests.Session:
         """
         Get a configured requests Session with proxy and auth settings.
@@ -260,30 +282,33 @@ class ProxyManager:
         """
         if self._session is not None:
             return self._session
-        
+
         session = requests.Session()
-        
+
         # Set User-Agent
         session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OpenMapUnifier/1.0'
-        
+
         if self.config.enabled and self.config.proxy_url:
-            # Configure proxies
             proxy_url = self.config.proxy_url
-            
-            # Add basic auth to URL if needed
+
             if self.config.auth_type == "basic" and self.config.username:
-                # Insert credentials into URL: http://user:pass@proxy:port
-                if "://" in proxy_url:
-                    protocol, rest = proxy_url.split("://", 1)
-                    creds = f"{self.config.username}:{self.config.password}"
-                    proxy_url = f"{protocol}://{creds}@{rest}"
-            
+                # URL-encode credentials so special characters don't break
+                # the proxy URL parser (root cause of most 407 errors).
+                proxy_url = self._build_proxy_url(
+                    proxy_url, self.config.username, self.config.password
+                )
+                # Also pre-set Proxy-Authorization for plain HTTP proxies.
+                # (For HTTPS, requests uses the URL creds during CONNECT.)
+                token = base64.b64encode(
+                    f"{self.config.username}:{self.config.password}".encode("utf-8")
+                ).decode("ascii")
+                session.headers['Proxy-Authorization'] = f"Basic {token}"
+
             session.proxies = {
                 'http': proxy_url,
                 'https': proxy_url,
             }
-            
-            # Configure NTLM auth if needed
+
             if self.config.auth_type == "ntlm" and self.config.username:
                 if NTLM_AVAILABLE:
                     ntlm_user = self.config.username
@@ -291,13 +316,20 @@ class ProxyManager:
                         ntlm_user = f"{self.config.domain}\\{self.config.username}"
                     session.auth = HttpNtlmAuth(ntlm_user, self.config.password)
                     print(f"[PROXY] NTLM auth configured for user: {ntlm_user}")
+                    print("[PROXY] NOTE: NTLM over HTTPS proxies via plain requests "
+                          "is not reliably supported. If you still get HTTP 407, "
+                          "switch the proxy to Basic auth or run a local NTLM "
+                          "relay such as cntlm.")
                 else:
                     print("[PROXY] WARNING: NTLM requested but requests-ntlm not installed!")
-            
-            print(f"[PROXY] Session configured with proxy: {self.config.proxy_url}")
+
+            # Mask credentials in the log line
+            safe_log = self.config.proxy_url
+            print(f"[PROXY] Session configured with proxy: {safe_log} "
+                  f"(auth: {self.config.auth_type})")
         else:
             print("[PROXY] Session configured for direct connection (no proxy).")
-        
+
         self._session = session
         return session
     
@@ -308,16 +340,13 @@ class ProxyManager:
         """
         if not self.config.enabled or not self.config.proxy_url:
             return None
-        
+
         proxy_url = self.config.proxy_url
-        
-        # Add basic auth credentials if needed
         if self.config.auth_type == "basic" and self.config.username:
-            if "://" in proxy_url:
-                protocol, rest = proxy_url.split("://", 1)
-                creds = f"{self.config.username}:{self.config.password}"
-                proxy_url = f"{protocol}://{creds}@{rest}"
-        
+            proxy_url = self._build_proxy_url(
+                proxy_url, self.config.username, self.config.password
+            )
+
         return {
             'http': proxy_url,
             'https': proxy_url,
