@@ -23,6 +23,131 @@ except ImportError:
         ProxyManager = None
         get_proxy_manager = None
 
+# =============================================================================
+# Bayern Open Data dataset catalog
+# =============================================================================
+# Single source of truth for which datasets the GUI offers.
+# All raw tile datasets follow the same 1km x 1km grid (EPSG:25832) and the
+# URL pattern: https://download1.bayernwolke.de/a/<key>/data/<tile_id><ext>
+# where <tile_id> is derived from easting/northing km (e.g. "32672_5424").
+#
+# License: Bayerische Vermessungsverwaltung — CC BY 4.0
+# Attribution (recommended): "Datenquelle: Bayerische Vermessungsverwaltung
+#                              – www.geodaten.bayern.de"
+#
+# Fields per entry:
+#   label        — human-readable name
+#   category     — group for UI (height, ortho, buildings, laser, wms_render)
+#   description  — short blurb for the GUI
+#   ext          — file extension downloaded
+#   resolution   — ground sample distance / LoD, for user info
+#   kind         — "raw" (direct tile file) or "wms" (rendered tile)
+#   # For raw: url_key is the path segment under /a/ on bayernwolke.de
+#   # For wms: base_url, layer, mime are used by generate_relief_tiles()
+# -----------------------------------------------------------------------------
+BAYERN_DATASETS = {
+    # ---- HEIGHT / TERRAIN (raw) ----
+    "dgm1": {
+        "label": "DGM1 — Digital Terrain Model (Height, 1 m)",
+        "category": "height",
+        "description": "Bare-earth elevation, 1m grid, GeoTIFF. THIS is real height data for Blender/3D.",
+        "ext": ".tif",
+        "resolution": "1 m / pixel",
+        "pixel_size_m": 1.0,
+        "avg_tile_mb": 4,
+        "kind": "raw",
+        "url_key": "dgm1",
+    },
+    "dgm5": {
+        "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
+        "category": "height",
+        "description": "Coarser 5m grid — useful for large areas where DGM1 would be too big.",
+        "ext": ".tif",
+        "resolution": "5 m / pixel",
+        "pixel_size_m": 5.0,
+        "avg_tile_mb": 0.2,
+        "kind": "raw",
+        "url_key": "dgm5",
+    },
+    # ---- ORTHOPHOTOS (raw) ----
+    "dop20": {
+        "label": "DOP20 RGB — Orthophoto 20 cm (Highest quality)",
+        "category": "ortho",
+        "description": "Raw RGB aerial imagery, 20cm/px, GeoTIFF. Large files (~300 MB/tile).",
+        "ext": ".tif",
+        "resolution": "20 cm / pixel",
+        "pixel_size_m": 0.2,
+        "avg_tile_mb": 300,
+        "kind": "raw",
+        "url_key": "dop20",
+    },
+    "dop40": {
+        "label": "DOP40 RGB — Orthophoto 40 cm",
+        "category": "ortho",
+        "description": "Raw RGB aerial imagery, 40cm/px, GeoTIFF. ~4x smaller than DOP20.",
+        "ext": ".tif",
+        "resolution": "40 cm / pixel",
+        "pixel_size_m": 0.4,
+        "avg_tile_mb": 75,
+        "kind": "raw",
+        "url_key": "dop40",
+    },
+    # ---- 3D BUILDINGS ----
+    "lod2": {
+        "label": "LoD2 — 3D building models (CityGML)",
+        "category": "buildings",
+        "description": "CityGML with building volumes at Level-of-Detail 2 (roof shapes).",
+        "ext": ".zip",
+        "resolution": "2 km tiles",
+        "avg_tile_mb": 3,
+        "kind": "raw",
+        "url_key": "lod2",
+    },
+    # ---- LASER / LIDAR ----
+    "laser": {
+        "label": "Laser — Raw LiDAR point cloud (LAZ)",
+        "category": "laser",
+        "description": "Compressed LAS (LAZ) — the raw point cloud DGM1 is derived from. Very large (~800 MB/tile).",
+        "ext": ".laz",
+        "resolution": "point cloud",
+        "avg_tile_mb": 800,
+        "kind": "raw",
+        "url_key": "laser",
+    },
+    # ---- WMS-RENDERED (visual) ----
+    "relief_wms": {
+        "label": "Relief (hillshade WMS)",
+        "category": "wms_render",
+        "description": "Stylised shaded-relief rendering. Visual only — not elevation numbers.",
+        "ext": ".tiff",
+        "resolution": "WMS render",
+        "kind": "wms",
+        "base_url": "https://geoservices.bayern.de/pro/wms/dgm/v1/relief",
+        "layer": "by_relief_schraeglicht",
+        "mime": "image/tiff",
+    },
+    "dop40_wms": {
+        "label": "DOP40 (WMS quick preview)",
+        "category": "wms_render",
+        "description": "WMS-rendered orthophoto preview. Faster but lower fidelity than raw DOP40.",
+        "ext": ".jpg",
+        "resolution": "WMS render",
+        "kind": "wms",
+        "base_url": "https://geoservices.bayern.de/od/wms/dop/v1/dop40",
+        "layer": "by_dop40c",
+        "mime": "image/jpeg",
+    },
+}
+
+BAYERN_CATEGORY_LABELS = {
+    "height":     "Height / Terrain (raw elevation)",
+    "ortho":      "Orthophotos (aerial imagery)",
+    "buildings":  "3D Buildings",
+    "laser":      "Laser / LiDAR",
+    "wms_render": "Visual renders (WMS)",
+}
+
+
 class MapDownloader:
     def __init__(self, download_dir="downloads", proxy_manager=None):
         self.download_dir = download_dir
@@ -54,7 +179,8 @@ class MapDownloader:
 
     def download_file(self, url, file_name, progress_callback=None):
         target_path = os.path.join(self.download_dir, file_name)
-        
+        part_path = target_path + ".part"
+
         dir_name = os.path.dirname(target_path)
         if dir_name and not os.path.exists(dir_name):
              try:
@@ -66,6 +192,15 @@ class MapDownloader:
             if progress_callback:
                 progress_callback(file_name, 100, "Skipped (Exists)", "-", "-")
             return True
+
+        # Clean up any leftover .part from a prior interrupted run — we restart
+        # from zero rather than attempt a resumable download (servers don't
+        # always honour Range, and the complexity isn't worth it here).
+        if os.path.exists(part_path):
+            try:
+                os.remove(part_path)
+            except OSError:
+                pass
 
         if progress_callback:
             progress_callback(file_name, 0, "Connecting...", "-", "-")
@@ -83,14 +218,20 @@ class MapDownloader:
             response.raise_for_status()
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
-            
-            with open(target_path, 'wb') as f:
+
+            with open(part_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=65536):
                     if self.stop_event:
                         if progress_callback:
                             progress_callback(file_name, 0, "Cancelled", "-", "-")
+                        # Don't leave a partial around after cancel.
+                        try:
+                            f.close()
+                            os.remove(part_path)
+                        except OSError:
+                            pass
                         return False
-                        
+
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
@@ -111,15 +252,52 @@ class MapDownloader:
                             status_msg = f"{current_str} / {total_str}"
 
                             progress_callback(file_name, percent, status_msg, speed_str, eta_str)
-            
+
+            # Size-check: if server reported a total, ensure we got all of it.
+            if total_size > 0 and downloaded != total_size:
+                try:
+                    os.remove(part_path)
+                except OSError:
+                    pass
+                msg = f"Truncated: got {downloaded} of {total_size} bytes"
+                print(f"[ERROR] {file_name}: {msg}")
+                if progress_callback:
+                    progress_callback(file_name, 0, msg, "-", "-")
+                return False
+
+            # Atomic rename: .part -> final name. Only now is the tile visible
+            # as "exists" to the skip-check on subsequent runs.
+            try:
+                os.replace(part_path, target_path)
+            except OSError as e:
+                msg = f"Rename failed: {e}"
+                print(f"[ERROR] {file_name}: {msg}")
+                if progress_callback:
+                    progress_callback(file_name, 0, msg, "-", "-")
+                return False
+
             if progress_callback:
                 progress_callback(file_name, 100, "Completed", "-", "-")
             return True
         except Exception as e:
-            msg = str(e)
-            print(f"[ERROR] Download failed for {file_name}: {msg}")
+            # Ensure no stale .part survives an exception.
+            try:
+                if os.path.exists(part_path):
+                    os.remove(part_path)
+            except OSError:
+                pass
+            # Classify via ProxyManager if available — otherwise fall back to str(e).
+            if self.proxy_manager:
+                try:
+                    code, msg = self.proxy_manager.classify_error(e)
+                    user_msg = f"[{code}] {msg}"
+                except Exception:
+                    user_msg = f"Error: {e}"
+            else:
+                user_msg = f"Error: {e}"
+            print(f"[ERROR] Download failed for {file_name}: {user_msg}")
             if progress_callback:
-                progress_callback(file_name, 0, f"Error: {msg}", "-", "-")
+                progress_callback(file_name, 0, user_msg, "-", "-")
             return False
 
     def parse_metalink(self, file_path):
@@ -237,17 +415,15 @@ class MapDownloader:
             end_y = math.ceil(maxy / grid_res) * grid_res
             
             files = []
-            
-            # Base URLs (Best Guess/Standard)
-            base_urls = {
-                "dgm1": ("https://download1.bayernwolke.de/a/dgm1/data", ".tif"),
-                "dop20": ("https://download1.bayernwolke.de/a/dop20/data", ".tif"),
-                "dop40": ("https://download1.bayernwolke.de/a/dop40/data", ".tif"),
-                "lod2": ("https://download1.bayernwolke.de/a/lod2/data", ".zip"),
-                "laser": ("https://download1.bayernwolke.de/a/laser/data", ".laz")
-            }
 
-            base_url, ext = base_urls.get(dataset, ("", ""))
+            # Derive base URL + extension from the dataset catalog (single source of truth).
+            meta = BAYERN_DATASETS.get(dataset)
+            if not meta or meta.get("kind") != "raw":
+                print(f"[WARN] Unknown or non-raw Bayern dataset '{dataset}' — nothing to generate.")
+                return []
+            url_key = meta["url_key"]
+            ext = meta["ext"]
+            base_url = f"https://download1.bayernwolke.de/a/{url_key}/data"
             # DGM1 is typically .tif (already set above)
             
             for x in range(start_x, end_x, grid_res):

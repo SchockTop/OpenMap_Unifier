@@ -1,6 +1,8 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
+*.pyo
 *.egg-info/
 .Python
 
@@ -12,20 +14,29 @@ env/
 # Vendored libs / wheel cache
 libraries/
 
-# Downloads & caches
+# Downloads — large data folders should not be committed
 downloads/
 downloads_*/
+downloads_bayern/
+downloads_osm/
+downloads_relief/
+downloads_satellite/
 *.tif
 *.tiff
 *.laz
 
 # Local configuration / secrets
+# (Proxy config contains usernames; passwords already omitted from serialization.)
 proxy_config.json
 .env
 *.log
+
+# Local Claude settings
+.claude/settings.local.json
 
 # OS / editor
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+*.swp

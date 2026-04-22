@@ -11,7 +11,8 @@ import time
 import subprocess
 
 from backend.geometry import PolygonExtractor
-from backend.downloader import MapDownloader
+from backend.downloader import MapDownloader, BAYERN_DATASETS, BAYERN_CATEGORY_LABELS
+from backend.worldfile import generate_for_folder as generate_worldfiles
 from backend.osm_downloader import (
     OSMDownloader, LAYER_ORDER, DEFAULT_LAYERS, LAYERS as OSM_LAYERS,
     OUTPUT_FORMATS, DEFAULT_OUTPUT_FORMAT,
@@ -64,8 +65,12 @@ class OpenMapUnifierApp(ctk.CTk):
         self.proxy_manager = None
         if PROXY_AVAILABLE:
             self.proxy_manager = get_proxy_manager(config_dir=".")
-            # Auto-detect proxy on startup
-            self.proxy_manager.auto_detect()
+            # Respect saved config: only auto-detect if user hasn't saved manual
+            # settings, or explicitly chose auto-detect mode. This prevents
+            # auto_detect() from clobbering saved manual host/username/auth_type.
+            cfg = self.proxy_manager.config
+            if cfg.auto_detect or (not cfg.enabled and not cfg.proxy_url):
+                self.proxy_manager.auto_detect()
         
         # Create downloader with proxy support
         self.downloader = MapDownloader(proxy_manager=self.proxy_manager)
@@ -77,11 +82,13 @@ class OpenMapUnifierApp(ctk.CTk):
         
         self.tab_tools = self.tabview.add("Map Tools")
         self.tab_osm = self.tabview.add("OSM Data")
+        self.tab_downloads = self.tabview.add("Downloads")
         self.tab_help = self.tabview.add("Help & Guide")
         self.tab_console = self.tabview.add("Console")
 
         self.setup_tools_tab()
         self.setup_osm_tab()
+        self.setup_downloads_tab()
         self.setup_help_tab()
         self.setup_console_tab()
 
@@ -124,56 +131,66 @@ class OpenMapUnifierApp(ctk.CTk):
         frame_right.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         
         ctk.CTkLabel(frame_right, text="2. Data Downloader", font=("Roboto", 18, "bold")).pack(pady=10)
-        
-        # --- Height Data Section ---
-        frame_height = ctk.CTkFrame(frame_right, fg_color="gray20")
-        frame_height.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(frame_height, text="Height Data (Relief)", font=("Roboto", 14, "bold")).pack(pady=5)
-        
-        height_controls = ctk.CTkFrame(frame_height, fg_color="transparent")
-        height_controls.pack(pady=5, fill="x", padx=5)
-        
-        btn_relief = ctk.CTkButton(height_controls, text="Download Relief", command=self.start_relief_download, fg_color="#8e44ad", hover_color="#9b59b6")
-        btn_relief.pack(side="left", padx=5)
 
-        self.chk_high_res_relief = ctk.CTkCheckBox(height_controls, text="High-Res (300 DPI)")
-        self.chk_high_res_relief.pack(side="left", padx=10)
+        # --- Bayern Open Data picker (catalog-driven) --------------------
+        frame_bayern = ctk.CTkFrame(frame_right, fg_color="gray20")
+        frame_bayern.pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(frame_bayern, text="Bayern Open Data",
+                     font=("Roboto", 14, "bold")).pack(pady=(6, 2))
+        ctk.CTkLabel(frame_bayern,
+                     text="Pick one or more datasets. DGM1 = real height data (for Blender / displacement).",
+                     font=("Roboto", 10), text_color="gray60",
+                     wraplength=460, justify="left").pack(padx=8, pady=(0, 4))
 
-        ctk.CTkButton(height_controls, text="Open Folder", width=110, height=28,
-                      fg_color="gray30", hover_color="gray40",
-                      command=lambda: self._open_folder("downloads_relief")).pack(side="right", padx=5)
-        
-        # --- Satellite Data Section ---
-        frame_sat = ctk.CTkFrame(frame_right, fg_color="gray20")
-        frame_sat.pack(fill="x", padx=10, pady=5)
-        ctk.CTkLabel(frame_sat, text="Satellite Imagery", font=("Roboto", 14, "bold")).pack(pady=5)
-        
-        # DOP20 (Raw Files - Higher Quality)
-        sat_row1 = ctk.CTkFrame(frame_sat, fg_color="transparent")
-        sat_row1.pack(pady=3, fill="x", padx=5)
-        
-        btn_dop20 = ctk.CTkButton(sat_row1, text="Download DOP20 (Raw TIF)", command=self.start_dop20_download, fg_color="#27ae60", hover_color="#2ecc71")
-        btn_dop20.pack(side="left", padx=5)
-        ctk.CTkLabel(sat_row1, text="20cm/px, best quality", font=("Roboto", 11), text_color="gray60").pack(side="left", padx=5)
+        scroll_bayern = ctk.CTkScrollableFrame(frame_bayern, height=260)
+        scroll_bayern.pack(fill="x", padx=6, pady=4)
 
-        ctk.CTkButton(sat_row1, text="Open Folder", width=110, height=28,
-                      fg_color="gray30", hover_color="gray40",
-                      command=lambda: self._open_folder("downloads_dop20")).pack(side="right", padx=5)
-        
-        # DOP40 (WMS Tiles)
-        sat_row2 = ctk.CTkFrame(frame_sat, fg_color="transparent")
-        sat_row2.pack(pady=3, fill="x", padx=5)
-        
-        btn_dop40 = ctk.CTkButton(sat_row2, text="Download DOP40 (WMS)", command=self.start_satellite_download, fg_color="#3498db", hover_color="#2980b9")
-        btn_dop40.pack(side="left", padx=5)
+        # Build checkboxes grouped by category, driven by BAYERN_DATASETS.
+        self.bayern_dataset_vars = {}  # key -> BooleanVar
+        for cat_key, cat_label in BAYERN_CATEGORY_LABELS.items():
+            entries = [(k, v) for k, v in BAYERN_DATASETS.items() if v["category"] == cat_key]
+            if not entries:
+                continue
+            ctk.CTkLabel(scroll_bayern, text=cat_label,
+                         font=("Roboto", 12, "bold"),
+                         text_color="#8cc8ff").pack(anchor="w", padx=6, pady=(6, 2))
+            for key, meta in entries:
+                row = ctk.CTkFrame(scroll_bayern, fg_color="gray15")
+                row.pack(fill="x", padx=4, pady=2)
+                var = tk.BooleanVar(value=(key == "dgm1"))  # default-on: DGM1
+                self.bayern_dataset_vars[key] = var
+                ctk.CTkCheckBox(row, text=meta["label"], variable=var,
+                                font=("Roboto", 12)).pack(anchor="w", padx=6, pady=(4, 0))
+                ctk.CTkLabel(row,
+                             text=f"{meta['description']}   ({meta['resolution']}, {meta['ext']})",
+                             font=("Roboto", 10), text_color="gray60",
+                             anchor="w", justify="left",
+                             wraplength=430).pack(anchor="w", padx=26, pady=(0, 4))
 
-        self.seg_format = ctk.CTkSegmentedButton(sat_row2, values=["JPG", "TIF"])
+        # WMS-only option: high-res toggle for WMS renders (300 DPI).
+        wms_opts = ctk.CTkFrame(frame_bayern, fg_color="transparent")
+        wms_opts.pack(fill="x", padx=6, pady=(0, 4))
+        self.chk_high_res_relief = ctk.CTkCheckBox(wms_opts, text="WMS high-res (300 DPI)")
+        self.chk_high_res_relief.pack(side="left", padx=4)
+
+        # Format segmented button — only applies to DOP40 WMS render.
+        ctk.CTkLabel(wms_opts, text="DOP40-WMS format:",
+                     font=("Roboto", 10), text_color="gray60").pack(side="left", padx=(12, 2))
+        self.seg_format = ctk.CTkSegmentedButton(wms_opts, values=["JPG", "TIF"], width=120)
         self.seg_format.set("JPG")
-        self.seg_format.pack(side="left", padx=5)
+        self.seg_format.pack(side="left", padx=2)
 
-        ctk.CTkButton(sat_row2, text="Open Folder", width=110, height=28,
-                      fg_color="gray30", hover_color="gray40",
-                      command=lambda: self._open_folder("downloads_satellite")).pack(side="right", padx=5)
+        ctk.CTkButton(frame_bayern, text="Download Selected Bayern Datasets",
+                      command=self.start_bayern_download,
+                      fg_color="#27ae60", hover_color="#2ecc71",
+                      height=36, font=("Roboto", 13, "bold")).pack(fill="x", padx=8, pady=(4, 4))
+
+        # License / attribution footer
+        ctk.CTkLabel(frame_bayern,
+                     text="© Bayerische Vermessungsverwaltung — CC BY 4.0\n"
+                          "Attribution: 'Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de'",
+                     font=("Roboto", 9), text_color="gray50",
+                     justify="left").pack(anchor="w", padx=8, pady=(0, 6))
         
         # --- Mass Data Section ---
         frame_meta = ctk.CTkFrame(frame_right, fg_color="gray20")
@@ -214,6 +231,236 @@ class OpenMapUnifierApp(ctk.CTk):
         self.download_list.pack(fill="both", expand=True, padx=5, pady=5)
         
         self.download_rows = {} # Map filename -> widgets
+
+    # =========================================================================
+    # Downloads tab — overview + clear + license attribution
+    # =========================================================================
+
+    # Folders the Downloads tab tracks. Tuples of (display_name, relative_path).
+    DOWNLOAD_FOLDERS = [
+        ("Bayern: DGM1 (Height)",          os.path.join("downloads_bayern", "dgm1")),
+        ("Bayern: DGM5 (Height)",          os.path.join("downloads_bayern", "dgm5")),
+        ("Bayern: DOP20 (Orthophoto)",     os.path.join("downloads_bayern", "dop20")),
+        ("Bayern: DOP40 (Orthophoto)",     os.path.join("downloads_bayern", "dop40")),
+        ("Bayern: LoD2 (3D buildings)",    os.path.join("downloads_bayern", "lod2")),
+        ("Bayern: Laser (LiDAR LAZ)",      os.path.join("downloads_bayern", "laser")),
+        ("Bayern: Relief WMS",             os.path.join("downloads_bayern", "relief_wms")),
+        ("Bayern: DOP40 WMS",              os.path.join("downloads_bayern", "dop40_wms")),
+        ("OSM Data",                       "downloads_osm"),
+        # Legacy folders from earlier versions — shown if present.
+        ("Legacy: downloads_relief",       "downloads_relief"),
+        ("Legacy: downloads_satellite",    "downloads_satellite"),
+        ("Legacy: downloads_dop20",        "downloads_dop20"),
+        ("Legacy: downloads",              "downloads"),
+    ]
+
+    def setup_downloads_tab(self):
+        self.tab_downloads.grid_columnconfigure(0, weight=1)
+        self.tab_downloads.grid_rowconfigure(1, weight=1)
+
+        # Header row
+        header = ctk.CTkFrame(self.tab_downloads)
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        ctk.CTkLabel(header, text="Downloads Overview",
+                     font=("Roboto", 18, "bold")).pack(side="left", padx=8, pady=6)
+        ctk.CTkButton(header, text="Refresh", width=90,
+                      command=self.refresh_downloads_overview,
+                      fg_color="#3498db", hover_color="#2980b9").pack(side="right", padx=4, pady=4)
+        ctk.CTkButton(header, text="Open base folder", width=140,
+                      command=lambda: self._open_folder("."),
+                      fg_color="gray30", hover_color="gray40").pack(side="right", padx=4, pady=4)
+
+        # Scrollable list of folder rows
+        self._downloads_scroll = ctk.CTkScrollableFrame(self.tab_downloads)
+        self._downloads_scroll.grid(row=1, column=0, sticky="nsew", padx=10, pady=4)
+
+        # License / attribution footer
+        lic = ctk.CTkFrame(self.tab_downloads, fg_color="gray15")
+        lic.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 10))
+        ctk.CTkLabel(lic, text="Attribution & Licensing",
+                     font=("Roboto", 13, "bold")).pack(anchor="w", padx=10, pady=(6, 2))
+        ctk.CTkLabel(
+            lic, justify="left", anchor="w", wraplength=1000,
+            text=(
+                "OpenStreetMap data  —  © OpenStreetMap contributors, "
+                "Open Database License (ODbL) v1.0.\n"
+                "    • Attribution: '© OpenStreetMap contributors'\n"
+                "    • Share-alike: any adapted database must be offered under ODbL.\n"
+                "    • Keep open: if you redistribute, do not apply DRM without an unrestricted copy.\n"
+                "    • Full text: https://opendatacommons.org/licenses/odbl/1-0/\n"
+                "\n"
+                "Bayern geodata  —  © Bayerische Vermessungsverwaltung, Creative Commons BY 4.0.\n"
+                "    • Attribution: 'Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de'\n"
+                "    • Full text: https://creativecommons.org/licenses/by/4.0/"
+            ),
+            font=("Consolas", 10), text_color="gray75",
+        ).pack(anchor="w", padx=10, pady=(0, 8))
+
+        self.refresh_downloads_overview()
+
+    def refresh_downloads_overview(self):
+        """Rebuild the folder rows with current file counts + sizes."""
+        # Clear prior rows
+        for child in self._downloads_scroll.winfo_children():
+            child.destroy()
+
+        total_files = 0
+        total_bytes = 0
+        for display, path in self.DOWNLOAD_FOLDERS:
+            count, size = self._folder_stats(path)
+            if count == 0 and not os.path.exists(path) and "Legacy" in display:
+                # Hide legacy folders that don't exist at all.
+                continue
+            total_files += count
+            total_bytes += size
+            self._add_download_folder_row(display, path, count, size)
+
+        # Totals footer row
+        footer = ctk.CTkFrame(self._downloads_scroll, fg_color="gray25")
+        footer.pack(fill="x", padx=2, pady=(8, 2))
+        ctk.CTkLabel(footer, text="TOTAL",
+                     font=("Roboto", 12, "bold"),
+                     width=200, anchor="w").pack(side="left", padx=8, pady=6)
+        ctk.CTkLabel(footer,
+                     text=f"{total_files} files, {self._fmt_bytes(total_bytes)}",
+                     font=("Roboto", 12, "bold")).pack(side="left", padx=8, pady=6)
+
+    def _add_download_folder_row(self, display, path, count, size):
+        row = ctk.CTkFrame(self._downloads_scroll, fg_color="gray20")
+        row.pack(fill="x", padx=2, pady=2)
+        row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(row, text=display, width=220, anchor="w",
+                     font=("Roboto", 12, "bold")).grid(row=0, column=0, padx=8, pady=(6, 0), sticky="w")
+        ctk.CTkLabel(row, text=path, anchor="w",
+                     font=("Consolas", 10), text_color="gray55").grid(
+            row=1, column=0, padx=8, pady=(0, 6), sticky="w")
+
+        if count == 0:
+            summary = "— empty —"
+            color = "gray55"
+        else:
+            summary = f"{count} files  •  {self._fmt_bytes(size)}"
+            color = "#8cc8ff"
+        ctk.CTkLabel(row, text=summary, font=("Roboto", 12),
+                     text_color=color).grid(row=0, column=1, padx=8, pady=6, sticky="e")
+
+        btns = ctk.CTkFrame(row, fg_color="transparent")
+        btns.grid(row=0, column=2, rowspan=2, padx=6, pady=4, sticky="e")
+        ctk.CTkButton(btns, text="Open", width=60,
+                      command=lambda p=path: self._open_folder(p),
+                      fg_color="gray30", hover_color="gray40").pack(side="left", padx=2)
+
+        # Write worldfiles — only meaningful for raw Bayern TIFF folders.
+        # Look up the matching BAYERN_DATASETS key via the folder basename.
+        dataset_key = os.path.basename(path)
+        dataset_meta = BAYERN_DATASETS.get(dataset_key, {})
+        can_worldfile = (count > 0
+                         and dataset_meta.get("kind") == "raw"
+                         and dataset_meta.get("pixel_size_m")
+                         and dataset_meta.get("ext") in (".tif", ".tiff"))
+        if can_worldfile:
+            ctk.CTkButton(
+                btns, text=".tfw", width=50,
+                command=lambda p=path, k=dataset_key: self._write_worldfiles(p, k),
+                fg_color="#2e86de", hover_color="#3498db",
+            ).pack(side="left", padx=2)
+
+        ctk.CTkButton(btns, text="Clear", width=60,
+                      command=lambda p=path, d=display: self._clear_folder(p, d),
+                      fg_color="#b03a2e", hover_color="#c0392b",
+                      state=("normal" if count > 0 else "disabled")).pack(side="left", padx=2)
+
+    @staticmethod
+    def _folder_stats(path):
+        """Return (file_count, total_bytes). Non-existent folder -> (0, 0)."""
+        if not os.path.isdir(path):
+            return 0, 0
+        count, size = 0, 0
+        for root, _, files in os.walk(path):
+            for f in files:
+                try:
+                    size += os.path.getsize(os.path.join(root, f))
+                    count += 1
+                except OSError:
+                    pass
+        return count, size
+
+    @staticmethod
+    def _fmt_bytes(n):
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if n < 1024:
+                return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
+            n /= 1024
+        return f"{n:.1f} PB"
+
+    def _open_folder(self, path):
+        """Open a folder in the OS file manager (Windows-first, best-effort)."""
+        if not os.path.exists(path):
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception:
+                messagebox.showwarning("Not found", f"Folder does not exist:\n{path}")
+                return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(os.path.abspath(path))
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", path])
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showwarning("Could not open", f"{path}\n\n{e}")
+
+    def _write_worldfiles(self, path, dataset_key):
+        """Generate .tfw + .prj for every tile in a raw Bayern folder."""
+        meta = BAYERN_DATASETS.get(dataset_key, {})
+        pixel = meta.get("pixel_size_m")
+        if not pixel:
+            messagebox.showwarning("Unknown dataset", f"No pixel size known for {dataset_key}.")
+            return
+        try:
+            made, skipped = generate_worldfiles(path, pixel_size_m=pixel)
+        except Exception as e:
+            messagebox.showerror("Worldfile error", f"Failed in {path}:\n{e}")
+            return
+        print(f"[INFO] {dataset_key}: wrote worldfiles for {made} tiles "
+              f"({skipped} non-Bayern filenames skipped).")
+        messagebox.showinfo("Worldfiles written",
+                            f"{made} .tfw + .prj sidecars written in:\n{path}\n\n"
+                            f"({skipped} filenames didn't match the Bayern tile scheme.)")
+
+    def _clear_folder(self, path, display):
+        """Delete every file inside `path` after user confirmation. Keeps the folder."""
+        if not os.path.isdir(path):
+            return
+        count, size = self._folder_stats(path)
+        if count == 0:
+            return
+        ok = messagebox.askyesno(
+            "Clear downloads?",
+            f"Delete {count} files ({self._fmt_bytes(size)}) from:\n\n{display}\n{path}\n\n"
+            "The folder itself will be kept. This cannot be undone.",
+        )
+        if not ok:
+            return
+        deleted = 0
+        errors = 0
+        for root, _, files in os.walk(path):
+            for f in files:
+                try:
+                    os.remove(os.path.join(root, f))
+                    deleted += 1
+                except OSError:
+                    errors += 1
+        print(f"[INFO] Cleared {deleted} files from {path} ({errors} errors).")
+        self.refresh_downloads_overview()
+        if errors:
+            messagebox.showwarning("Partial clear",
+                                   f"Deleted {deleted} files, {errors} could not be removed "
+                                   "(may be locked or in use).")
 
     def setup_help_tab(self):
         scroll = ctk.CTkScrollableFrame(self.tab_help)
@@ -310,90 +557,133 @@ class OpenMapUnifierApp(ctk.CTk):
              print("[ERROR] No files found in metalink.")
              messagebox.showerror("Error", "Could not parse any files from the metalink.\nCheck the console/log for details.")
 
-    def start_relief_download(self):
+    def start_bayern_download(self):
+        """Dispatch download for every selected dataset in the Bayern picker."""
         poly = self.text_polygon.get("1.0", "end").strip()
         if not poly:
             messagebox.showwarning("Warning", "Please extract a polygon first.")
+            return
+
+        selected = [k for k, v in self.bayern_dataset_vars.items() if v.get()]
+        if not selected:
+            messagebox.showwarning("Warning", "Select at least one Bayern dataset.")
             return
 
         high_res = self.chk_high_res_relief.get() == 1
-        res_label = "High-Res 300 DPI" if high_res else "Standard"
-        print(f"[INFO] Starting Relief Download ({res_label})...")
-        self.downloader.download_dir = "downloads_relief"
-        if not os.path.exists("downloads_relief"):
-            os.makedirs("downloads_relief")
-            
-        self.add_download_row("Relief", f"Generating {res_label} tiles...", 0, "Calculating", "...")
-        threading.Thread(target=self.run_relief_gen, args=(poly, "relief", "tiff", high_res), daemon=True).start()
-
-    def start_satellite_download(self):
-        poly = self.text_polygon.get("1.0", "end").strip()
-        if not poly:
-            messagebox.showwarning("Warning", "Please extract a polygon first.")
-            return
-
         fmt = self.seg_format.get().lower()
-        print(f"[INFO] Starting Satellite (DOP40 WMS) Download... Format: {fmt}")
-        
-        self.downloader.download_dir = "downloads_satellite"
-        if not os.path.exists("downloads_satellite"):
-            os.makedirs("downloads_satellite")
-            
-        self.add_download_row("DOP40", f"Generating DOP40 ({fmt}) tiles...", 0, "Calculating", "...")
-        threading.Thread(target=self.run_relief_gen, args=(poly, "dop40", fmt, False), daemon=True).start()
 
-    def start_dop20_download(self):
-        """Download raw DOP20 satellite imagery files (highest quality)."""
-        poly = self.text_polygon.get("1.0", "end").strip()
-        if not poly:
-            messagebox.showwarning("Warning", "Please extract a polygon first.")
+        # Pre-flight estimate — warn before kicking off multi-hundred-GB pulls.
+        preview = self._estimate_bayern_download(poly, selected)
+        if preview is not None:
+            tiles_total, mb_total, per_dataset = preview
+            lines = [f"  • {label}: {n} tiles  ~{self.downloader.format_bytes(mb*1024*1024)}"
+                     for label, n, mb in per_dataset]
+            preamble = (
+                f"About to queue {tiles_total} tiles across {len(selected)} dataset(s).\n"
+                f"Estimated total: ~{self.downloader.format_bytes(mb_total * 1024 * 1024)}\n\n"
+                + "\n".join(lines)
+                + "\n\nProceed?"
+            )
+            # Only prompt once the estimate crosses ~2 GB — smaller pulls go straight through.
+            if mb_total > 2_000:
+                if not messagebox.askyesno("Confirm large download", preamble):
+                    return
+
+        for key in selected:
+            meta = BAYERN_DATASETS[key]
+            out_dir = os.path.join("downloads_bayern", key)
+            os.makedirs(out_dir, exist_ok=True)
+            if meta["kind"] == "raw":
+                self.add_download_row(meta["label"], "Generating tile list...", 0, "Calculating", "...")
+                threading.Thread(
+                    target=self._run_bayern_raw,
+                    args=(poly, key, out_dir),
+                    daemon=True,
+                ).start()
+            else:  # wms
+                # DOP40 WMS uses the picker's format; relief WMS is always tiff.
+                wms_fmt = fmt if key == "dop40_wms" else "tiff"
+                self.add_download_row(meta["label"], "Generating WMS tiles...", 0, "Calculating", "...")
+                threading.Thread(
+                    target=self._run_bayern_wms,
+                    args=(poly, key, wms_fmt, high_res, out_dir),
+                    daemon=True,
+                ).start()
+
+    def _estimate_bayern_download(self, poly, selected_keys):
+        """Return (total_tiles, total_mb, [(label, tile_count, mb)…]) or None on error."""
+        total_tiles = 0
+        total_mb = 0.0
+        per_dataset = []
+        try:
+            for key in selected_keys:
+                meta = BAYERN_DATASETS[key]
+                if meta["kind"] == "raw":
+                    tiles = self.downloader.generate_1km_grid_files(poly, dataset=key)
+                    n = len(tiles)
+                    mb = n * meta.get("avg_tile_mb", 0)
+                else:
+                    # WMS: ~5 MB/tile high-res, ~1 MB/tile standard — rough.
+                    tiles = self.downloader.generate_relief_tiles(
+                        poly, layer=meta.get("layer", "dop40"),
+                        format_ext="tif" if key == "relief_wms" else "jpg",
+                        high_res=False)
+                    n = len(tiles)
+                    mb = n * 1
+                per_dataset.append((meta["label"], n, mb))
+                total_tiles += n
+                total_mb += mb
+        except Exception as e:
+            print(f"[WARN] size estimate failed: {e}")
+            return None
+        return total_tiles, total_mb, per_dataset
+
+    def _run_bayern_raw(self, poly, key, out_dir):
+        """Download a raw Bayern dataset (e.g. dgm1, dop20) into its own folder."""
+        # MapDownloader.download_dir is shared across threads, so we wrap the
+        # call in a per-download change. Downloads are added sequentially per
+        # dataset so this is safe.
+        self.downloader.download_dir = out_dir
+        files = self.downloader.generate_1km_grid_files(poly, dataset=key)
+        if not files:
+            self.after(0, lambda: self.add_download_row(
+                key.upper(), "No intersecting tiles found.", 0, "Error", ""))
             return
+        print(f"[INFO] {key}: generated {len(files)} tiles -> {out_dir}")
+        for fname, _ in files:
+            self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
+        self.run_downloads_batch(files)
 
-        print("[INFO] Starting DOP20 (Raw TIF) Download...")
-        
-        self.downloader.download_dir = "downloads_dop20"
-        if not os.path.exists("downloads_dop20"):
-            os.makedirs("downloads_dop20")
-            
-        self.add_download_row("DOP20", "Generating file list...", 0, "Calculating", "...")
-        threading.Thread(target=self.run_raw_download, args=(poly, "dop20"), daemon=True).start()
+        # After downloads finish, write .tfw + .prj sidecars so Blender GIS
+        # (and any other georef-aware tool) can batch-import without the
+        # "Unable to read georef infos from worldfile or geotiff tags" error.
+        meta = BAYERN_DATASETS.get(key, {})
+        pixel = meta.get("pixel_size_m")
+        if pixel and meta.get("ext") in (".tif", ".tiff"):
+            try:
+                made, skipped = generate_worldfiles(out_dir, pixel_size_m=pixel)
+                print(f"[INFO] {key}: wrote worldfiles for {made} tiles "
+                      f"({skipped} non-Bayern filenames skipped).")
+            except Exception as e:
+                print(f"[WARN] {key}: worldfile generation failed: {e}")
 
-    def run_raw_download(self, poly, dataset):
-        """Handler for raw file downloads (DOP20, DGM1, etc.)."""
-        print(f"[INFO] Generating {dataset.upper()} file list for polygon...")
-        
-        files = self.downloader.generate_1km_grid_files(poly, dataset=dataset)
-        if files:
-            print(f"[INFO] Generated {len(files)} files to download.")
-            
-            for fname, url in files:
-                self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
-                
-            self.add_download_row(dataset.upper(), f"Queued {len(files)} files.", 100, "Ready", "")
-            self.run_downloads_batch(files)
-        else:
-            print("[WARN] No files generated for polygon.")
-            self.add_download_row(dataset.upper(), "No intersecting files found.", 0, "Error", "")
-
-    def run_relief_gen(self, poly, type_key, format_ext="jpg", high_res=False):
-        print(f"[INFO] Generating {type_key} tiles for polygon (Format: {format_ext}, High-Res: {high_res})...")
-        # 'dop40' or 'relief' - logic is handled in downloader now
-        layer = "by_relief_schraeglicht" if type_key == "relief" else "dop40"
-        
-        tiles = self.downloader.generate_relief_tiles(poly, layer=layer, format_ext=format_ext, high_res=high_res)
-        if tiles:
-             print(f"[INFO] Generated {len(tiles)} tiles.")
-             
-             # Show pending state immediately
-             for fname, url in tiles:
-                  # Use 'after' to ensure thread safety when manipulating UI from thread
-                  self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
-                  
-             self.add_download_row(type_key.title(), f"Queued {len(tiles)} tiles.", 100, "Ready", "")
-             self.run_downloads_batch(tiles)
-        else:
-             print("[WARN] No tiles generated.")
-             self.add_download_row(type_key.title(), "No intersecting tiles found.", 0, "Error", "")
+    def _run_bayern_wms(self, poly, key, fmt, high_res, out_dir):
+        """Download a WMS-rendered Bayern dataset (relief, dop40_wms)."""
+        self.downloader.download_dir = out_dir
+        meta = BAYERN_DATASETS[key]
+        # generate_relief_tiles historically uses layer="by_relief_schraeglicht"
+        # for relief and "dop40" to trigger DOP40 inside the downloader.
+        layer = meta["layer"] if key == "relief_wms" else "dop40"
+        tiles = self.downloader.generate_relief_tiles(
+            poly, layer=layer, format_ext=fmt, high_res=high_res)
+        if not tiles:
+            self.after(0, lambda: self.add_download_row(
+                key.upper(), "No intersecting tiles found.", 0, "Error", ""))
+            return
+        print(f"[INFO] {key}: generated {len(tiles)} WMS tiles -> {out_dir}")
+        for fname, _ in tiles:
+            self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
+        self.run_downloads_batch(tiles)
 
     def add_download_row(self, filename, status, percent, speed, eta):
         if filename in self.download_rows:
@@ -483,7 +773,8 @@ class OpenMapUnifierApp(ctk.CTk):
         # Update status and reinitialize downloader with new settings
         self.update_proxy_status()
         self.downloader.proxy_manager = self.proxy_manager
-        self.downloader._session = None  # Force new session
+        self.downloader._session = None       # Force new Bayern session
+        self.osm_downloader._session = None   # Force new OSM session
 
 
     # =========================================================================
@@ -586,6 +877,11 @@ class OpenMapUnifierApp(ctk.CTk):
         self.osm_format_hint.pack(fill="x", padx=8, pady=(0, 8))
         self._osm_format_changed(default_label)
 
+        # SSL settings moved to unified Proxy Settings dialog (applies to Bayern + OSM).
+        ctk.CTkLabel(frame_left,
+                     text="SSL / proxy settings → top-right 'Proxy Settings' button",
+                     font=("Roboto", 10), text_color="gray50").pack(padx=10, pady=(0, 4))
+
         # Action buttons
         ctk.CTkButton(frame_left, text="Download Selected Layers",
                       command=self.start_osm_download,
@@ -596,7 +892,20 @@ class OpenMapUnifierApp(ctk.CTk):
         ctk.CTkButton(frame_left, text="Cancel Download",
                       command=self._osm_cancel_download,
                       fg_color="#7a2a2a", hover_color="#a33",
-                      height=30).pack(fill="x", padx=10, pady=(0, 8))
+                      height=30).pack(fill="x", padx=10, pady=(0, 4))
+
+        ctk.CTkButton(frame_left, text="Test Overpass Connection",
+                      command=self._osm_test_connection,
+                      fg_color="gray30", hover_color="gray40",
+                      height=30).pack(fill="x", padx=10, pady=(0, 4))
+
+        self.lbl_osm_conn = ctk.CTkLabel(frame_left, text="",
+                                          font=("Roboto", 11), text_color="gray60")
+        self.lbl_osm_conn.pack(padx=10, pady=(0, 4))
+
+        ctk.CTkLabel(frame_left,
+                     text="Output: GeoJSON/OSM XML per layer — compatible with QGIS, OSG, Terrain3D",
+                     font=("Roboto", 11), text_color="gray50").pack(padx=10, pady=(0, 4))
 
         # ── Right panel: layer selection ───────────────────────────────────
         frame_right = ctk.CTkFrame(self.tab_osm)
@@ -680,6 +989,40 @@ class OpenMapUnifierApp(ctk.CTk):
                 text=f"Area estimate: ~{area:.1f} km²  (buffer: {buffer} m)")
         except Exception:
             self.lbl_osm_area.configure(text="Area estimate: invalid polygon")
+
+    def _osm_test_connection(self):
+        """Quick connectivity test to overpass-api.de — runs in thread."""
+        self.lbl_osm_conn.configure(text="Testing...", text_color="yellow")
+
+        def _run():
+            import requests as _req
+            url = "https://overpass-api.de/api/interpreter"
+            # Tiny status query — should return in under 2 seconds
+            query = "[out:json][timeout:5];node(0,0,0,0);out;"
+            try:
+                session = self.osm_downloader._get_session()
+                # session already has verify/CA bundle from proxy_manager
+                r = session.post(url, data={"data": query}, timeout=10)
+                if r.status_code == 200:
+                    msg, color = "Overpass reachable (HTTP 200)", "#27ae60"
+                else:
+                    msg, color = f"HTTP {r.status_code} from Overpass", "#e67e22"
+            except _req.exceptions.SSLError:
+                msg = "SSL error — try disabling SSL verify (proxy inspection)"
+                color = "#e74c3c"
+            except _req.exceptions.ProxyError:
+                msg = "Proxy blocked — ask IT to whitelist overpass-api.de"
+                color = "#e74c3c"
+            except _req.exceptions.ConnectionError:
+                msg = "Cannot reach overpass-api.de — check proxy/network"
+                color = "#e74c3c"
+            except Exception as e:
+                msg, color = f"Error: {e}", "#e74c3c"
+
+            self.after(0, lambda: self.lbl_osm_conn.configure(text=msg, text_color=color))
+            print(f"[OSM] Connection test: {msg}")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _osm_browse_dir(self):
         path = filedialog.askdirectory(title="Select OSM output directory")
@@ -808,8 +1151,8 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         super().__init__(parent)
         
         self.proxy_manager = proxy_manager
-        self.title("Proxy Settings")
-        self.geometry("500x450")
+        self.title("Proxy & SSL Settings")
+        self.geometry("560x620")
         self.resizable(False, False)
         
         # Make modal
@@ -871,7 +1214,31 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         self.entry_password.grid(row=1, column=1, sticky="ew", padx=5, pady=2)
         
         self.creds_frame.grid_columnconfigure(1, weight=1)
-        
+
+        # --- SSL / TLS Section (applies to Bayern + OSM, regardless of proxy mode) ---
+        ssl_frame = ctk.CTkFrame(container, fg_color="gray20")
+        ssl_frame.pack(fill="x", pady=10, padx=5)
+
+        ctk.CTkLabel(ssl_frame, text="SSL / TLS", anchor="w",
+                     font=("Roboto", 13, "bold")).pack(fill="x", padx=10, pady=(8, 0))
+        ctk.CTkLabel(ssl_frame,
+                     text="Applied to both Bayern + OSM downloads. Required when a corporate proxy inspects HTTPS.",
+                     anchor="w", font=("Roboto", 10), text_color="gray60",
+                     wraplength=500, justify="left").pack(fill="x", padx=10, pady=(0, 5))
+
+        self.var_ssl_verify = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(ssl_frame, text="Verify SSL certificates",
+                        variable=self.var_ssl_verify).pack(anchor="w", padx=10, pady=3)
+
+        ca_row = ctk.CTkFrame(ssl_frame, fg_color="transparent")
+        ca_row.pack(fill="x", padx=10, pady=(3, 8))
+        ctk.CTkLabel(ca_row, text="CA bundle (.pem):", width=120, anchor="w").pack(side="left")
+        self.entry_ca_bundle = ctk.CTkEntry(ca_row, placeholder_text="(empty = system default)")
+        self.entry_ca_bundle.pack(side="left", fill="x", expand=True, padx=5)
+        ctk.CTkButton(ca_row, text="Browse...", width=80,
+                      command=self._browse_ca_bundle,
+                      fg_color="gray30", hover_color="gray40").pack(side="left")
+
         # --- Status / Info ---
         self.lbl_status = ctk.CTkLabel(container, text="", font=("Roboto", 11), text_color="gray60")
         self.lbl_status.pack(pady=10)
@@ -922,9 +1289,23 @@ class ProxySettingsDialog(ctk.CTkToplevel):
 
         self.entry_domain.delete(0, "end")
         self.entry_domain.insert(0, config.domain)
-        
+
+        # SSL fields
+        self.var_ssl_verify.set(config.ssl_verify)
+        self.entry_ca_bundle.delete(0, "end")
+        self.entry_ca_bundle.insert(0, config.ca_bundle_path)
+
         self.on_mode_change()
         self.on_auth_change(self.seg_auth.get())
+
+    def _browse_ca_bundle(self):
+        path = filedialog.askopenfilename(
+            title="Select CA bundle (.pem)",
+            filetypes=[("PEM certificates", "*.pem *.crt *.cer"), ("All files", "*.*")],
+        )
+        if path:
+            self.entry_ca_bundle.delete(0, "end")
+            self.entry_ca_bundle.insert(0, path)
     
     def on_mode_change(self):
         """Handle mode radio button change."""
@@ -988,19 +1369,24 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         self.on_mode_change()
     
     def do_test_connection(self):
-        """Test the current connection."""
-        self.lbl_status.configure(text="Testing connection...", text_color="yellow")
+        """Test connections to all known data sources (Bayern + OSM)."""
+        self.lbl_status.configure(text="Testing Bayern + OSM...", text_color="yellow")
         self.update()
-        
-        # Apply current form settings temporarily
+
+        # Apply current form settings temporarily (including SSL).
         self.apply_settings(save=False)
-        
-        success, message = self.proxy_manager.test_connection()
-        
-        if success:
-            self.lbl_status.configure(text=f"✓ {message}", text_color="#27ae60")
-        else:
-            self.lbl_status.configure(text=f"✗ {message}", text_color="#e74c3c")
+
+        results = self.proxy_manager.test_connections()
+
+        lines = []
+        overall_ok = True
+        for label, (ok, msg) in results.items():
+            mark = "✓" if ok else "✗"
+            lines.append(f"{mark} {label}: {msg}")
+            overall_ok = overall_ok and ok
+
+        color = "#27ae60" if overall_ok else "#e74c3c"
+        self.lbl_status.configure(text="\n".join(lines), text_color=color)
     
     def apply_settings(self, save=True):
         """Apply form settings to proxy manager."""
@@ -1043,7 +1429,13 @@ class ProxySettingsDialog(ctk.CTkToplevel):
                 password=password,
                 domain=self.entry_domain.get()
             )
-        
+
+        # SSL settings apply regardless of proxy mode.
+        self.proxy_manager.set_ssl(
+            ssl_verify=bool(self.var_ssl_verify.get()),
+            ca_bundle_path=self.entry_ca_bundle.get().strip(),
+        )
+
         if save:
             self.proxy_manager.save_config()
     

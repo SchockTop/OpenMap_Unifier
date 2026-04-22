@@ -433,6 +433,8 @@ class OSMDownloader:
                         cb(0, "Cancelled")
                         return False, "Cancelled"
                     try:
+                        # verify / CA bundle / proxy auth all inherited from
+                        # the proxy_manager session.
                         response = session.post(
                             endpoint,
                             data={"data": query},
@@ -603,16 +605,34 @@ class OSMDownloader:
                 except Exception:
                     pass
             return False, msg
-        except requests.exceptions.RequestException as e:
-            msg = f"Network error: {e}"
-            cb(0, msg)
-            return False, msg
         except json.JSONDecodeError as e:
             msg = f"Bad server response: {e}"
             cb(0, msg)
             return False, msg
+        except requests.exceptions.RequestException as e:
+            # Use unified classifier from proxy_manager when available,
+            # so OSM errors read the same as Bayern downloads.
+            if self.proxy_manager and hasattr(self.proxy_manager, "classify_error"):
+                try:
+                    code, user_msg = self.proxy_manager.classify_error(e)
+                    msg = f"[{code}] {user_msg}"
+                except Exception:
+                    msg = f"Network error: {e}"
+            else:
+                msg = f"Network error: {e}"
+            print(f"[OSM] {layer_name}: {msg}")
+            cb(0, msg)
+            return False, msg
         except Exception as e:
-            msg = f"Error: {e}"
+            if self.proxy_manager and hasattr(self.proxy_manager, "classify_error"):
+                try:
+                    code, user_msg = self.proxy_manager.classify_error(e)
+                    msg = f"[{code}] {user_msg}"
+                except Exception:
+                    msg = f"Error: {e}"
+            else:
+                msg = f"Error: {e}"
+            print(f"[OSM] {layer_name}: {msg}")
             cb(0, msg)
             return False, msg
 
