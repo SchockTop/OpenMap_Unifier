@@ -29,45 +29,32 @@ except ImportError:
 # Single source of truth for which datasets the GUI offers.
 #
 # Raw tiles live on Bayernwolke's CDN. The URL shape is:
-#   https://download1.bayernwolke.de/a/<url_key>/<url_subpath>/<tile_id><ext>
-# but the three pieces are NOT the same across datasets:
+#   https://download1.bayernwolke.de/a/<url_path>/<tile_id><ext>
 #
-#   | dataset | url_subpath | grid_km | tile_prefix | ext   |
-#   |---------|-------------|---------|-------------|-------|
-#   | dop20   | data        | 1       | "32"        | .tif  |  (verified)
-#   | dop40   | data        | 1       | "32"        | .tif  |  (verified)
-#   | dgm1    | data        | 1       | "32"        | .tif  |  (verified)
-#   | dgm5    | data        | 2       | ""          | .tif  |  (grid/prefix fixed)
-#   | lod2    | citygml     | 2       | ""          | .gml  |  (verified)
-#   | laser   | data        | 1       | "32"        | .laz  |  (unverified)
+# `url_path` is the ENTIRE path between `/a/` and the tile filename and
+# varies per dataset — not all datasets are `/a/<key>/data/`:
 #
-# The earlier catalog assumed every dataset shared the DOP20 layout, which
-# produced 404s for LoD2 and DGM5 (bug report: "lod2 and laz also don't work").
+#   | dataset | url_path      | grid_km | tile_prefix | ext   | verified |
+#   |---------|---------------|---------|-------------|-------|----------|
+#   | dop20   | dop20/data    | 1       | "32"        | .tif  | yes (dop20rgb.meta4)
+#   | dop40   | dop40/data    | 1       | "32"        | .tif  | inferred
+#   | dgm1    | dgm/dgm1      | 1       | "32"        | .tif  | per metalink path
+#   | dgm5    | dgm/dgm5      | 2       | ""          | .tif  | per metalink path
+#   | lod2    | lod2/citygml  | 2       | ""          | .gml  | live-verified
+#   | laser   | laser/laz     | 1       | "32"        | .laz  | unverified (best guess)
+#
 # Tile IDs are derived from easting/northing km in EPSG:25832:
-#   "32672_5424" = zone 32 + 672 km E + 5424 km N     (1 km grid)
-#   "704_5322"   = 704 km E + 5322 km N, stepped by 2 (2 km grid)
+#   "32672_5424" = zone-32 prefix + 672 km E + 5424 km N  (1 km grid, DOP/DGM1)
+#   "704_5322"   = 704 km E + 5322 km N, stepped by 2     (2 km grid, LoD2/DGM5)
+#
+# Each dataset also carries `probe_candidates`: alternative url_paths the
+# backend.api.probe_dataset() helper can HEAD-test against a known tile.
+# When the user reports a dataset still 404s, that probe tells us which
+# path the server actually uses so we can update `url_path` here.
 #
 # License: Bayerische Vermessungsverwaltung — CC BY 4.0
 # Attribution (recommended): "Datenquelle: Bayerische Vermessungsverwaltung
 #                              – www.geodaten.bayern.de"
-#
-# Fields per entry:
-#   label        — human-readable name
-#   category     — group for UI (height, ortho, buildings, laser, wms_render)
-#   description  — short blurb for the GUI
-#   ext          — file extension downloaded
-#   resolution   — ground sample distance / LoD, for user info
-#   kind         — "raw" (direct tile file) or "wms" (rendered tile)
-#   # Raw-only:
-#   url_key      — first segment under /a/ on bayernwolke.de
-#   url_subpath  — second segment (optional, default "data")
-#   grid_km      — tile edge in km (optional, default 1)
-#   tile_prefix  — prefix on the tile ID (optional, default "32")
-#   verified     — True if the URL layout has been confirmed against the
-#                  actual server (optional, default True); unverified entries
-#                  emit a warning so the user knows a 404 is expected.
-#   # WMS-only:
-#   base_url, layer, mime — used by generate_relief_tiles()
 # -----------------------------------------------------------------------------
 BAYERN_DATASETS = {
     # ---- HEIGHT / TERRAIN (raw) ----
@@ -80,7 +67,8 @@ BAYERN_DATASETS = {
         "pixel_size_m": 1.0,
         "avg_tile_mb": 4,
         "kind": "raw",
-        "url_key": "dgm1",
+        "url_path": "dgm/dgm1",
+        "probe_candidates": ["dgm/dgm1", "dgm1/data", "dgm1/tiff", "dgm1"],
     },
     "dgm5": {
         "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
@@ -89,11 +77,12 @@ BAYERN_DATASETS = {
         "ext": ".tif",
         "resolution": "5 m / pixel",
         "pixel_size_m": 5.0,
-        "avg_tile_mb": 0.8,  # 2 km tile at 5 m ~= 400x400 px ~= <1 MB
+        "avg_tile_mb": 0.8,
         "kind": "raw",
-        "url_key": "dgm5",
+        "url_path": "dgm/dgm5",
         "grid_km": 2,
         "tile_prefix": "",
+        "probe_candidates": ["dgm/dgm5", "dgm5/data", "dgm5/tiff", "dgm5"],
     },
     # ---- ORTHOPHOTOS (raw) ----
     "dop20": {
@@ -105,7 +94,8 @@ BAYERN_DATASETS = {
         "pixel_size_m": 0.2,
         "avg_tile_mb": 300,
         "kind": "raw",
-        "url_key": "dop20",
+        "url_path": "dop20/data",
+        "probe_candidates": ["dop20/data"],
     },
     "dop40": {
         "label": "DOP40 RGB — Orthophoto 40 cm",
@@ -116,7 +106,8 @@ BAYERN_DATASETS = {
         "pixel_size_m": 0.4,
         "avg_tile_mb": 75,
         "kind": "raw",
-        "url_key": "dop40",
+        "url_path": "dop40/data",
+        "probe_candidates": ["dop40/data"],
     },
     # ---- 3D BUILDINGS ----
     "lod2": {
@@ -127,10 +118,10 @@ BAYERN_DATASETS = {
         "resolution": "2 km tiles",
         "avg_tile_mb": 3,
         "kind": "raw",
-        "url_key": "lod2",
-        "url_subpath": "citygml",
+        "url_path": "lod2/citygml",
         "grid_km": 2,
         "tile_prefix": "",
+        "probe_candidates": ["lod2/citygml"],
     },
     # ---- LASER / LIDAR ----
     "laser": {
@@ -141,12 +132,10 @@ BAYERN_DATASETS = {
         "resolution": "1 km tiles",
         "avg_tile_mb": 800,
         "kind": "raw",
-        "url_key": "laser",
-        # Path layout not yet confirmed against the live server. If this
-        # still 404s, the user should paste a working URL from
-        # https://geodaten.bayern.de/opengeodata/OpenDataDetail.html?pn=laserdaten
-        # so we can pin the correct url_subpath / tile_prefix.
+        # Best guess — run probe_dataset('laser', ...) to confirm which path works.
+        "url_path": "laser/laz",
         "verified": False,
+        "probe_candidates": ["laser/laz", "laser/data", "laser", "laser/lidar", "laserdaten/laz", "laserdaten/data"],
     },
     # ---- WMS-RENDERED (visual) ----
     "relief_wms": {
@@ -180,6 +169,10 @@ BAYERN_CATEGORY_LABELS = {
     "laser":      "Laser / LiDAR",
     "wms_render": "Visual renders (WMS)",
 }
+
+# Rough Bayern extent in EPSG:25832 (metres). Used to clip polygons so a
+# KML from elsewhere doesn't produce a flood of 404 URLs.
+BAYERN_BBOX_25832 = (500_000, 5_225_000, 940_000, 5_610_000)
 
 
 class MapDownloader:
@@ -466,8 +459,7 @@ class MapDownloader:
         """
         Build a (filename, url) list for every raw Bayern tile that intersects
         the polygon. Per-dataset URL layout (path, grid size, tile prefix,
-        extension) comes from BAYERN_DATASETS — see the comment on that dict
-        for the per-dataset table.
+        extension) comes from BAYERN_DATASETS — see the comment on that dict.
 
         The function name is historical; the grid is not necessarily 1 km.
         """
@@ -480,41 +472,75 @@ class MapDownloader:
                 print(f"[WARN] Unknown or non-raw Bayern dataset '{dataset}' — nothing to generate.")
                 return []
 
-            url_key = meta["url_key"]
-            ext = meta["ext"]
-            url_subpath = meta.get("url_subpath", "data")
-            grid_km = meta.get("grid_km", 1)
-            tile_prefix = meta.get("tile_prefix", "32")
             if not meta.get("verified", True):
                 print(f"[WARN] Bayern dataset '{dataset}' URL layout is NOT verified — "
-                      "404s are possible. If so, please report a working sample URL.")
+                      "404s are possible. Run backend.api.probe_dataset() to find the correct path.")
+
+            ext = meta["ext"]
+            grid_km = meta.get("grid_km", 1)
+            tile_prefix = meta.get("tile_prefix", "32")
 
             poly = loads(polygon_wkt)
             transformer = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
             projected_poly = Polygon([transformer.transform(x, y) for x, y in poly.exterior.coords])
 
+            # Clip to Bayern's rough extent in EPSG:25832. Polygons that fall
+            # entirely outside (user pastes a KML from another country, or the
+            # projection wraps for far-away points) would otherwise yield a
+            # huge list of 404-bound URLs.
+            bayern_box = box(*BAYERN_BBOX_25832)
+            clipped = projected_poly.intersection(bayern_box)
+            if clipped.is_empty:
+                print(f"[WARN] polygon does not overlap Bayern — 0 tiles for {dataset}.")
+                return []
+
             grid_res = 1000 * grid_km
-            minx, miny, maxx, maxy = projected_poly.bounds
+            minx, miny, maxx, maxy = clipped.bounds
             start_x = math.floor(minx / grid_res) * grid_res
             start_y = math.floor(miny / grid_res) * grid_res
             end_x = math.ceil(maxx / grid_res) * grid_res
             end_y = math.ceil(maxy / grid_res) * grid_res
 
-            base_url = f"https://download1.bayernwolke.de/a/{url_key}/{url_subpath}"
             files = []
             for x in range(start_x, end_x, grid_res):
                 for y in range(start_y, end_y, grid_res):
                     tile_box = box(x, y, x + grid_res, y + grid_res)
-                    if not projected_poly.intersects(tile_box):
+                    if not clipped.intersects(tile_box):
                         continue
                     east_km = int(x // 1000)
                     north_km = int(y // 1000)
                     tile_id = f"{tile_prefix}{east_km}_{north_km}"
                     file_name = f"{tile_id}{ext}"
-                    url = f"{base_url}/{file_name}"
+                    url = tile_url_for(dataset, east_km, north_km)
                     files.append((file_name, url))
 
             return files
         except Exception as e:
             print(f"[ERROR] generating raw grid: {e}")
             return []
+
+
+# =============================================================================
+# Small pure helpers used by backend/api.py and the tests.
+# =============================================================================
+
+def tile_id_for(dataset, east_km, north_km):
+    """Return the tile filename (without leading path) for one raw dataset."""
+    meta = BAYERN_DATASETS[dataset]
+    if meta.get("kind") != "raw":
+        raise ValueError(f"{dataset!r} is not a raw-tile dataset")
+    prefix = meta.get("tile_prefix", "32")
+    return f"{prefix}{int(east_km)}_{int(north_km)}{meta['ext']}"
+
+
+def tile_url_for(dataset, east_km, north_km, url_path_override=None):
+    """Build the download URL for one raw-tile dataset at (east_km, north_km).
+
+    ``url_path_override`` lets the probe helper try alternative path layouts
+    without mutating the catalog."""
+    meta = BAYERN_DATASETS[dataset]
+    if meta.get("kind") != "raw":
+        raise ValueError(f"{dataset!r} is not a raw-tile dataset")
+    url_path = url_path_override if url_path_override is not None else meta["url_path"]
+    filename = tile_id_for(dataset, east_km, north_km)
+    return f"https://download1.bayernwolke.de/a/{url_path}/{filename}"

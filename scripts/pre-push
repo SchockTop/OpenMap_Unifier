@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Git pre-push hook: run the test suite before letting the push through.
+# Install with:
+#   bash scripts/install-hooks.sh
+#
+# Skip once (e.g. pushing docs-only changes you can't test) with:
+#   git push --no-verify
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# Pick up a venv automatically when one exists.
+if [[ -x "venv/bin/python" ]]; then
+    PY=venv/bin/python
+elif [[ -x "venv/Scripts/python.exe" ]]; then
+    PY=venv/Scripts/python.exe
+elif command -v python3 >/dev/null 2>&1; then
+    PY=python3
+else
+    PY=python
+fi
+
+echo "[pre-push] running pytest with $PY ..."
+if ! "$PY" -m pytest tests/ -q; then
+    echo
+    echo "[pre-push] tests failed — push aborted."
+    echo "[pre-push] fix the failures or re-run with --no-verify to bypass."
+    exit 1
+fi
+echo "[pre-push] tests passed."
