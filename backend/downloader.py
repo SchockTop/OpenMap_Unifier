@@ -27,9 +27,25 @@ except ImportError:
 # Bayern Open Data dataset catalog
 # =============================================================================
 # Single source of truth for which datasets the GUI offers.
-# All raw tile datasets follow the same 1km x 1km grid (EPSG:25832) and the
-# URL pattern: https://download1.bayernwolke.de/a/<key>/data/<tile_id><ext>
-# where <tile_id> is derived from easting/northing km (e.g. "32672_5424").
+#
+# Raw tiles live on Bayernwolke's CDN. The URL shape is:
+#   https://download1.bayernwolke.de/a/<url_key>/<url_subpath>/<tile_id><ext>
+# but the three pieces are NOT the same across datasets:
+#
+#   | dataset | url_subpath | grid_km | tile_prefix | ext   |
+#   |---------|-------------|---------|-------------|-------|
+#   | dop20   | data        | 1       | "32"        | .tif  |  (verified)
+#   | dop40   | data        | 1       | "32"        | .tif  |  (verified)
+#   | dgm1    | data        | 1       | "32"        | .tif  |  (verified)
+#   | dgm5    | data        | 2       | ""          | .tif  |  (grid/prefix fixed)
+#   | lod2    | citygml     | 2       | ""          | .gml  |  (verified)
+#   | laser   | data        | 1       | "32"        | .laz  |  (unverified)
+#
+# The earlier catalog assumed every dataset shared the DOP20 layout, which
+# produced 404s for LoD2 and DGM5 (bug report: "lod2 and laz also don't work").
+# Tile IDs are derived from easting/northing km in EPSG:25832:
+#   "32672_5424" = zone 32 + 672 km E + 5424 km N     (1 km grid)
+#   "704_5322"   = 704 km E + 5322 km N, stepped by 2 (2 km grid)
 #
 # License: Bayerische Vermessungsverwaltung — CC BY 4.0
 # Attribution (recommended): "Datenquelle: Bayerische Vermessungsverwaltung
@@ -42,8 +58,16 @@ except ImportError:
 #   ext          — file extension downloaded
 #   resolution   — ground sample distance / LoD, for user info
 #   kind         — "raw" (direct tile file) or "wms" (rendered tile)
-#   # For raw: url_key is the path segment under /a/ on bayernwolke.de
-#   # For wms: base_url, layer, mime are used by generate_relief_tiles()
+#   # Raw-only:
+#   url_key      — first segment under /a/ on bayernwolke.de
+#   url_subpath  — second segment (optional, default "data")
+#   grid_km      — tile edge in km (optional, default 1)
+#   tile_prefix  — prefix on the tile ID (optional, default "32")
+#   verified     — True if the URL layout has been confirmed against the
+#                  actual server (optional, default True); unverified entries
+#                  emit a warning so the user knows a 404 is expected.
+#   # WMS-only:
+#   base_url, layer, mime — used by generate_relief_tiles()
 # -----------------------------------------------------------------------------
 BAYERN_DATASETS = {
     # ---- HEIGHT / TERRAIN (raw) ----
@@ -61,13 +85,15 @@ BAYERN_DATASETS = {
     "dgm5": {
         "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
         "category": "height",
-        "description": "Coarser 5m grid — useful for large areas where DGM1 would be too big.",
+        "description": "Coarser 5m grid, 2 km tiles — useful for large areas where DGM1 would be too big.",
         "ext": ".tif",
         "resolution": "5 m / pixel",
         "pixel_size_m": 5.0,
-        "avg_tile_mb": 0.2,
+        "avg_tile_mb": 0.8,  # 2 km tile at 5 m ~= 400x400 px ~= <1 MB
         "kind": "raw",
         "url_key": "dgm5",
+        "grid_km": 2,
+        "tile_prefix": "",
     },
     # ---- ORTHOPHOTOS (raw) ----
     "dop20": {
@@ -96,12 +122,15 @@ BAYERN_DATASETS = {
     "lod2": {
         "label": "LoD2 — 3D building models (CityGML)",
         "category": "buildings",
-        "description": "CityGML with building volumes at Level-of-Detail 2 (roof shapes).",
-        "ext": ".zip",
+        "description": "CityGML with building volumes at Level-of-Detail 2 (roof shapes), 2 km tiles.",
+        "ext": ".gml",
         "resolution": "2 km tiles",
         "avg_tile_mb": 3,
         "kind": "raw",
         "url_key": "lod2",
+        "url_subpath": "citygml",
+        "grid_km": 2,
+        "tile_prefix": "",
     },
     # ---- LASER / LIDAR ----
     "laser": {
@@ -109,10 +138,15 @@ BAYERN_DATASETS = {
         "category": "laser",
         "description": "Compressed LAS (LAZ) — the raw point cloud DGM1 is derived from. Very large (~800 MB/tile).",
         "ext": ".laz",
-        "resolution": "point cloud",
+        "resolution": "1 km tiles",
         "avg_tile_mb": 800,
         "kind": "raw",
         "url_key": "laser",
+        # Path layout not yet confirmed against the live server. If this
+        # still 404s, the user should paste a working URL from
+        # https://geodaten.bayern.de/opengeodata/OpenDataDetail.html?pn=laserdaten
+        # so we can pin the correct url_subpath / tile_prefix.
+        "verified": False,
     },
     # ---- WMS-RENDERED (visual) ----
     "relief_wms": {
@@ -178,6 +212,15 @@ class MapDownloader:
         return f"{int(m)}m {int(s)}s"
 
     def download_file(self, url, file_name, progress_callback=None):
+        """Download a single tile. ``url`` may be a string or a list of mirror
+        URLs — mirrors are tried in order and only a 4xx/5xx or network failure
+        causes a fallback. A successful download short-circuits."""
+        urls = [url] if isinstance(url, str) else list(url)
+        if not urls:
+            if progress_callback:
+                progress_callback(file_name, 0, "Error: no URL", "-", "-")
+            return False
+
         target_path = os.path.join(self.download_dir, file_name)
         part_path = target_path + ".part"
 
@@ -202,9 +245,33 @@ class MapDownloader:
             except OSError:
                 pass
 
-        if progress_callback:
-            progress_callback(file_name, 0, "Connecting...", "-", "-")
+        last_error_msg = None
+        for attempt_idx, current_url in enumerate(urls):
+            if self.stop_event:
+                return False
+            mirror_note = "" if len(urls) == 1 else f" (mirror {attempt_idx + 1}/{len(urls)})"
+            if progress_callback:
+                progress_callback(file_name, 0, f"Connecting...{mirror_note}", "-", "-")
 
+            ok, last_error_msg = self._try_single_url(
+                current_url, file_name, part_path, target_path, progress_callback, mirror_note)
+            if ok:
+                return True
+            if self.stop_event:
+                # Cancel propagates — don't keep trying mirrors.
+                return False
+
+        # All mirrors exhausted.
+        if last_error_msg:
+            print(f"[ERROR] Download failed for {file_name}: {last_error_msg}")
+            if progress_callback:
+                progress_callback(file_name, 0, last_error_msg, "-", "-")
+        return False
+
+    def _try_single_url(self, url, file_name, part_path, target_path,
+                        progress_callback, mirror_note):
+        """Attempt one URL. Returns (True, None) on success, (False, error_str)
+        on any failure — partial files are cleaned up either way."""
         start_time = time.time()
         try:
             # Get session with proxy config if available
@@ -230,26 +297,26 @@ class MapDownloader:
                             os.remove(part_path)
                         except OSError:
                             pass
-                        return False
+                        return False, "Cancelled"
 
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
-                        
+
                         if progress_callback and total_size > 0:
                             elapsed = time.time() - start_time
                             percent = int((downloaded / total_size) * 100)
-                            
+
                             speed = downloaded / elapsed if elapsed > 0 else 0
                             speed_str = f"{self.format_bytes(speed)}/s"
-                            
+
                             remaining = total_size - downloaded
                             eta = remaining / speed if speed > 0 else 0
                             eta_str = self.format_time(eta)
-                            
+
                             current_str = self.format_bytes(downloaded)
                             total_str = self.format_bytes(total_size)
-                            status_msg = f"{current_str} / {total_str}"
+                            status_msg = f"{current_str} / {total_str}{mirror_note}"
 
                             progress_callback(file_name, percent, status_msg, speed_str, eta_str)
 
@@ -260,10 +327,8 @@ class MapDownloader:
                 except OSError:
                     pass
                 msg = f"Truncated: got {downloaded} of {total_size} bytes"
-                print(f"[ERROR] {file_name}: {msg}")
-                if progress_callback:
-                    progress_callback(file_name, 0, msg, "-", "-")
-                return False
+                print(f"[WARN] {file_name}: {msg}{mirror_note}")
+                return False, msg
 
             # Atomic rename: .part -> final name. Only now is the tile visible
             # as "exists" to the skip-check on subsequent runs.
@@ -272,13 +337,12 @@ class MapDownloader:
             except OSError as e:
                 msg = f"Rename failed: {e}"
                 print(f"[ERROR] {file_name}: {msg}")
-                if progress_callback:
-                    progress_callback(file_name, 0, msg, "-", "-")
-                return False
+                # Local filesystem error — don't bother trying another mirror.
+                return False, msg
 
             if progress_callback:
                 progress_callback(file_name, 100, "Completed", "-", "-")
-            return True
+            return True, None
         except Exception as e:
             # Ensure no stale .part survives an exception.
             try:
@@ -295,26 +359,31 @@ class MapDownloader:
                     user_msg = f"Error: {e}"
             else:
                 user_msg = f"Error: {e}"
-            print(f"[ERROR] Download failed for {file_name}: {user_msg}")
-            if progress_callback:
-                progress_callback(file_name, 0, user_msg, "-", "-")
-            return False
+            print(f"[WARN] {file_name}{mirror_note}: {user_msg}")
+            return False, user_msg
 
     def parse_metalink(self, file_path):
+        """Parse a .meta4 and return [(name, [mirror_url, ...]), ...].
+
+        Bayern's metalinks typically list download1.bayernwolke.de and
+        download2.bayernwolke.de as mirrors. download_file() will fall
+        through the list on failure, so one mirror being down no longer
+        kills the batch."""
         try:
             tree = ET.parse(file_path)
             root = tree.getroot()
             files = []
             for elem in root.iter():
-                if elem.tag.endswith('file'):
-                    name = elem.get('name')
-                    url = None
-                    for child in elem:
-                        if child.tag.endswith('url'):
-                            url = child.text
-                            break
-                    if name and url:
-                        files.append((name, url))
+                if not elem.tag.endswith('file'):
+                    continue
+                name = elem.get('name')
+                urls = [
+                    child.text.strip()
+                    for child in elem
+                    if child.tag.endswith('url') and child.text and child.text.strip()
+                ]
+                if name and urls:
+                    files.append((name, urls))
             return files
         except Exception as e:
             print(f"[ERROR] Metalink parse error: {e}")
@@ -395,54 +464,56 @@ class MapDownloader:
 
     def generate_1km_grid_files(self, polygon_wkt, dataset="dgm1"):
         """
-        Generates URLs for raw data tiles (1km x 1km) based on the standard OpenData naming convention.
-        Grid aligned to 1000m steps in EPSG:25832.
-        Nomenclature often: 32<East_km>_<North_km> (e.g., 32672_5424)
+        Build a (filename, url) list for every raw Bayern tile that intersects
+        the polygon. Per-dataset URL layout (path, grid size, tile prefix,
+        extension) comes from BAYERN_DATASETS — see the comment on that dict
+        for the per-dataset table.
+
+        The function name is historical; the grid is not necessarily 1 km.
         """
         try:
             if ";" in polygon_wkt:
                 polygon_wkt = polygon_wkt.split(";", 1)[1]
-            
-            poly = loads(polygon_wkt)
-            transformer = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
-            projected_poly = Polygon([transformer.transform(x, y) for x, y in poly.exterior.coords])
-            
-            minx, miny, maxx, maxy = projected_poly.bounds
-            grid_res = 1000
-            start_x = math.floor(minx / grid_res) * grid_res
-            start_y = math.floor(miny / grid_res) * grid_res
-            end_x = math.ceil(maxx / grid_res) * grid_res
-            end_y = math.ceil(maxy / grid_res) * grid_res
-            
-            files = []
 
-            # Derive base URL + extension from the dataset catalog (single source of truth).
             meta = BAYERN_DATASETS.get(dataset)
             if not meta or meta.get("kind") != "raw":
                 print(f"[WARN] Unknown or non-raw Bayern dataset '{dataset}' — nothing to generate.")
                 return []
+
             url_key = meta["url_key"]
             ext = meta["ext"]
-            base_url = f"https://download1.bayernwolke.de/a/{url_key}/data"
-            # DGM1 is typically .tif (already set above)
-            
+            url_subpath = meta.get("url_subpath", "data")
+            grid_km = meta.get("grid_km", 1)
+            tile_prefix = meta.get("tile_prefix", "32")
+            if not meta.get("verified", True):
+                print(f"[WARN] Bayern dataset '{dataset}' URL layout is NOT verified — "
+                      "404s are possible. If so, please report a working sample URL.")
+
+            poly = loads(polygon_wkt)
+            transformer = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
+            projected_poly = Polygon([transformer.transform(x, y) for x, y in poly.exterior.coords])
+
+            grid_res = 1000 * grid_km
+            minx, miny, maxx, maxy = projected_poly.bounds
+            start_x = math.floor(minx / grid_res) * grid_res
+            start_y = math.floor(miny / grid_res) * grid_res
+            end_x = math.ceil(maxx / grid_res) * grid_res
+            end_y = math.ceil(maxy / grid_res) * grid_res
+
+            base_url = f"https://download1.bayernwolke.de/a/{url_key}/{url_subpath}"
+            files = []
             for x in range(start_x, end_x, grid_res):
                 for y in range(start_y, end_y, grid_res):
                     tile_box = box(x, y, x + grid_res, y + grid_res)
-                    if projected_poly.intersects(tile_box):
-                        # Naming Scheme: 32 + (x/1000 defined as 3 digits) + (y/1000 defined as 4 digits)
-                        # Example X=672000 -> 672. Y=5424000 -> 5424.
-                        # Combined: 32672_5424
-                        
-                        east_km = int(x / 1000)
-                        north_km = int(y / 1000)
-                        
-                        tile_id = f"32{east_km}_{north_km}"
-                        
-                        file_name = f"{tile_id}{ext}"
-                        url = f"{base_url}/{file_name}"
-                        files.append((file_name, url))
-                        
+                    if not projected_poly.intersects(tile_box):
+                        continue
+                    east_km = int(x // 1000)
+                    north_km = int(y // 1000)
+                    tile_id = f"{tile_prefix}{east_km}_{north_km}"
+                    file_name = f"{tile_id}{ext}"
+                    url = f"{base_url}/{file_name}"
+                    files.append((file_name, url))
+
             return files
         except Exception as e:
             print(f"[ERROR] generating raw grid: {e}")
