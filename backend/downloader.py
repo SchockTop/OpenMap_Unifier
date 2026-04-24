@@ -50,8 +50,11 @@ except ImportError:
 #   resolution   — ground sample distance / LoD, for user info
 #   kind         — "raw" (direct tile file) or "wms" (rendered tile)
 #   # For raw:
-#   #   url_path  — full path under /a/ on bayernwolke.de (may contain slashes)
-#   #   grid_km   — tile size in km (default 1). DGM5 is 2 km on the AdV grid.
+#   #   url_path     — full path under /a/ on bayernwolke.de (may contain slashes)
+#   #   grid_km      — tile size in km (default 1). DGM5 is 2 km on the AdV grid.
+#   #   tile_prefix  — string prepended to "<east_km>_<north_km>" in the filename.
+#   #                  DOP uses "32" (UTM-zone marker), DGM uses "" — confirmed
+#   #                  against Bavaria's live metalinks (poly2metalink output).
 #   # For wms: base_url, layer, mime are used by generate_relief_tiles()
 # -----------------------------------------------------------------------------
 BAYERN_RAW_MIRRORS = [
@@ -65,6 +68,9 @@ BAYERN_DATASETS = {
     # not the flat /a/dgm1/ path used for DOP. The metalink index at
     # geodaten.bayern.de/odd/a/dgm/dgm1/ confirms this grouping.
     "dgm1": {
+        # Tile filenames for DGM1 have NO "32" UTM-zone prefix — verified
+        # against a live metalink from poly2metalink, which lists files
+        # like "729_5433.tif" at https://download1.bayernwolke.de/a/dgm/dgm1/.
         "label": "DGM1 — Digital Terrain Model (Height, 1 m)",
         "category": "height",
         "description": "Bare-earth elevation, 1m grid, GeoTIFF. THIS is real height data for Blender/3D.",
@@ -74,12 +80,13 @@ BAYERN_DATASETS = {
         "avg_tile_mb": 4,
         "kind": "raw",
         "url_path": "dgm/dgm1",
+        "tile_prefix": "",
     },
     "dgm5": {
-        # DGM5 ships on the 2 km x 2 km AdV tile grid — NOT the 1 km grid
-        # DOP/DGM1 use. If we step the polygon at 1 km we hit odd-km tile
-        # IDs that don't exist and every tile 404s. grid_km=2 makes us
-        # emit only the even-km IDs the server actually has.
+        # DGM5 also drops the "32" UTM prefix (same /a/dgm/ group as DGM1).
+        # Bavaria's DGM5 ships on the 2 km AdV tile grid per their docs,
+        # so grid_km=2 keeps us on even-km coords. If a live metalink
+        # shows 1 km spacing, set grid_km=1.
         "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
         "category": "height",
         "description": "Coarser 5m grid on 2 km AdV tiles — useful for large areas where DGM1 would be too big.",
@@ -90,6 +97,7 @@ BAYERN_DATASETS = {
         "kind": "raw",
         "url_path": "dgm/dgm5",
         "grid_km": 2,
+        "tile_prefix": "",
     },
     # ---- ORTHOPHOTOS (raw) ----
     "dop20": {
@@ -453,6 +461,10 @@ class MapDownloader:
 
             grid_km = int(meta.get("grid_km", 1))
             grid_res = grid_km * 1000
+            # "32" UTM-zone prefix for DOP, empty for DGM — default matches
+            # the historical behaviour so DOP catalog entries don't have to
+            # opt in.
+            tile_prefix = meta.get("tile_prefix", "32")
 
             minx, miny, maxx, maxy = projected_poly.bounds
             start_x = math.floor(minx / grid_res) * grid_res
@@ -466,15 +478,13 @@ class MapDownloader:
                 for y in range(start_y, end_y, grid_res):
                     tile_box = box(x, y, x + grid_res, y + grid_res)
                     if projected_poly.intersects(tile_box):
-                        # Naming Scheme: 32 + (x/1000 defined as 3 digits) + (y/1000 defined as 4 digits)
-                        # Example X=672000 -> 672. Y=5424000 -> 5424.
-                        # Combined: 32672_5424
-                        
+                        # Naming: <tile_prefix><east_km>_<north_km><ext>.
+                        # DOP:  "32672_5424.tif"  (tile_prefix="32")
+                        # DGM:  "672_5424.tif"    (tile_prefix="")
                         east_km = int(x / 1000)
                         north_km = int(y / 1000)
-                        
-                        tile_id = f"32{east_km}_{north_km}"
-                        
+                        tile_id = f"{tile_prefix}{east_km}_{north_km}"
+
                         file_name = f"{tile_id}{ext}"
                         url = f"{base_url}/{file_name}"
                         files.append((file_name, url))

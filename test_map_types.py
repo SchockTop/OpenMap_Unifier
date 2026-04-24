@@ -136,7 +136,7 @@ class TestCatalogShape(unittest.TestCase):
 
     def test_dgm5_snaps_to_2km_grid(self):
         # DGM5 tiles only exist on the 2 km AdV grid (even km coords).
-        # Stepping at 1 km gives us phantom tiles like 32725_5431 that 404.
+        # Stepping at 1 km gives us phantom tiles that 404.
         # Guard: every generated DGM5 tile's easting/northing must be even.
         dl = MapDownloader(download_dir="downloads_test")
         # Big enough polygon to span several 2 km tiles.
@@ -148,11 +148,13 @@ class TestCatalogShape(unittest.TestCase):
         files = dl.generate_1km_grid_files(poly, dataset="dgm5")
         self.assertTrue(files, "dgm5 produced no tiles")
         for fname, _url in files:
-            # fname looks like "32724_5430.tif" — strip "32" and ".tif",
-            # split on "_", both halves must be even km.
+            # DGM5 filenames are "<east>_<north>.tif" with NO "32" prefix.
             stem = fname.rsplit(".", 1)[0]
-            self.assertTrue(stem.startswith("32"), fname)
-            east_km, north_km = stem[2:].split("_")
+            self.assertFalse(
+                stem.startswith("32"),
+                f"{fname}: DGM5 tiles must NOT carry the '32' UTM prefix",
+            )
+            east_km, north_km = stem.split("_")
             self.assertEqual(
                 int(east_km) % 2, 0,
                 f"{fname}: easting {east_km} must be even for 2 km grid",
@@ -161,6 +163,33 @@ class TestCatalogShape(unittest.TestCase):
                 int(north_km) % 2, 0,
                 f"{fname}: northing {north_km} must be even for 2 km grid",
             )
+
+    def test_dgm_tile_filenames_have_no_utm_prefix(self):
+        # Regression guard confirmed against a live metalink:
+        # https://download1.bayernwolke.de/a/dgm/dgm1/729_5433.tif
+        # DOP uses "32729_5433.tif"; DGM uses "729_5433.tif". The "32"
+        # UTM-zone prefix must NOT appear in DGM filenames.
+        dl = MapDownloader(download_dir="downloads_test")
+        # Polygon from the GitHub issue (eastern Bavaria).
+        poly = (
+            "SRID=4326;POLYGON(("
+            "12.08077846 49.01266954, 12.09094576 48.99645375,"
+            " 12.14810248 49.00884129, 12.13773552 49.02450149,"
+            " 12.08077846 49.01266954"
+            "))"
+        )
+        for dataset in ("dgm1", "dgm5"):
+            with self.subTest(dataset=dataset):
+                files = dl.generate_1km_grid_files(poly, dataset=dataset)
+                self.assertTrue(files, f"{dataset}: no tiles")
+                for fname, url in files:
+                    self.assertFalse(
+                        fname.startswith("32"),
+                        f"{dataset}: filename {fname!r} still has '32' prefix",
+                    )
+                    # Tile IDs should match Bavaria's metalink pattern exactly.
+                    self.assertRegex(fname, r"^\d{3}_\d{4}\.tif$", fname)
+                    self.assertNotIn("/32", url.rsplit("/", 1)[-1])
 
     def test_dop_keeps_data_segment(self):
         # Sister guard: DOP20/DOP40 DO have /data/ in the path (verified
