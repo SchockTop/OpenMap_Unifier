@@ -101,6 +101,39 @@ class TestCatalogShape(unittest.TestCase):
                 )
                 self.assertTrue(url.endswith(".tif"), url)
 
+    def test_polygon_z_altitude_is_tolerated(self):
+        # Google Earth often exports KML with altitude per vertex, which
+        # shapely parses as a 3D POLYGON Z. The downloader must strip Z
+        # silently — a "x, y" unpack over 3-tuples used to raise
+        # ValueError: too many values to unpack and kill the whole batch.
+        dl = MapDownloader(download_dir="downloads_test")
+        wkt_2d = (
+            "SRID=4326;POLYGON(("
+            "12.081 49.012, 12.091 48.996, 12.148 49.008,"
+            " 12.137 49.024, 12.081 49.012"
+            "))"
+        )
+        wkt_3d = (
+            "SRID=4326;POLYGON Z(("
+            "12.081 49.012 0, 12.091 48.996 0, 12.148 49.008 0,"
+            " 12.137 49.024 0, 12.081 49.012 0"
+            "))"
+        )
+        for dataset in ("dgm1", "dgm5", "dop20"):
+            with self.subTest(dataset=dataset):
+                tiles_2d = dl.generate_1km_grid_files(wkt_2d, dataset=dataset)
+                tiles_3d = dl.generate_1km_grid_files(wkt_3d, dataset=dataset)
+                self.assertTrue(tiles_3d, f"{dataset}: POLYGON Z yielded no tiles")
+                self.assertEqual(
+                    sorted(tiles_2d), sorted(tiles_3d),
+                    f"{dataset}: 2D and 3D polygons must produce the same tiles",
+                )
+        # Relief WMS path uses the same coord-iteration — check it too.
+        relief_2d = dl.generate_relief_tiles(wkt_2d, layer="by_relief_schraeglicht")
+        relief_3d = dl.generate_relief_tiles(wkt_3d, layer="by_relief_schraeglicht")
+        self.assertTrue(relief_3d, "relief: POLYGON Z yielded no tiles")
+        self.assertEqual(sorted(relief_2d), sorted(relief_3d))
+
     def test_dgm5_snaps_to_2km_grid(self):
         # DGM5 tiles only exist on the 2 km AdV grid (even km coords).
         # Stepping at 1 km gives us phantom tiles like 32725_5431 that 404.

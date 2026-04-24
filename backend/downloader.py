@@ -349,7 +349,11 @@ class MapDownloader:
             
             poly = loads(polygon_wkt)
             transformer = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
-            projected_poly = Polygon([transformer.transform(x, y) for x, y in poly.exterior.coords])
+            # Index c[0]/c[1] instead of unpacking `for x, y in ...` so we
+            # survive POLYGON Z(lon lat alt ...) inputs. KML polygons from
+            # Google Earth often include a zero altitude per vertex; we
+            # always work in 2D on the EPSG:25832 grid, so drop Z here.
+            projected_poly = Polygon([transformer.transform(c[0], c[1]) for c in poly.exterior.coords])
             
             minx, miny, maxx, maxy = projected_poly.bounds
             grid_res = 1000
@@ -430,7 +434,11 @@ class MapDownloader:
 
             poly = loads(polygon_wkt)
             transformer = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
-            projected_poly = Polygon([transformer.transform(x, y) for x, y in poly.exterior.coords])
+            # Index c[0]/c[1] instead of unpacking `for x, y in ...` so we
+            # survive POLYGON Z(lon lat alt ...) inputs. KML polygons from
+            # Google Earth often include a zero altitude per vertex; we
+            # always work in 2D on the EPSG:25832 grid, so drop Z here.
+            projected_poly = Polygon([transformer.transform(c[0], c[1]) for c in poly.exterior.coords])
 
             # Derive base URL, extension, and grid step from the catalog.
             meta = BAYERN_DATASETS.get(dataset)
