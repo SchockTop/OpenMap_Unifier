@@ -29,8 +29,9 @@ def generate_tile_urls(polygon_wkt, output_srid=25832):
     # The portal uses UTM32N for the BBOX requests
     transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{output_srid}", always_xy=True)
     
-    # Project the polygon
-    projected_poly = Polygon([transformer.transform(x, y) for x, y in poly.exterior.coords])
+    # Project the polygon (index c[0]/c[1] so POLYGON Z inputs with altitude
+    # still work — we only care about the 2D footprint for tile selection).
+    projected_poly = Polygon([transformer.transform(c[0], c[1]) for c in poly.exterior.coords])
     
     # 3. Calculate Bounding Box of the projected polygon
     minx, miny, maxx, maxy = projected_poly.bounds
