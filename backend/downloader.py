@@ -28,8 +28,11 @@ except ImportError:
 # =============================================================================
 # Single source of truth for which datasets the GUI offers.
 # All raw tile datasets follow the same 1km x 1km grid (EPSG:25832) and the
-# URL pattern: https://download1.bayernwolke.de/a/<key>/data/<tile_id><ext>
-# where <tile_id> is derived from easting/northing km (e.g. "32672_5424").
+# URL pattern: https://<mirror>/a/<url_path>/data/<tile_id><ext>
+# where <tile_id> is derived from easting/northing km (e.g. "32672_5424") and
+# <url_path> can include a group prefix (e.g. "dgm/dgm1"), mirroring the
+# Bavarian opendata metalink layout at
+# https://geodaten.bayernwolke.de/odd/a/<url_path>/meta/metalink/09.meta4
 #
 # License: Bayerische Vermessungsverwaltung — CC BY 4.0
 # Attribution (recommended): "Datenquelle: Bayerische Vermessungsverwaltung
@@ -42,11 +45,21 @@ except ImportError:
 #   ext          — file extension downloaded
 #   resolution   — ground sample distance / LoD, for user info
 #   kind         — "raw" (direct tile file) or "wms" (rendered tile)
-#   # For raw: url_key is the path segment under /a/ on bayernwolke.de
+#   # For raw:
+#   #   url_path  — full path under /a/ on bayernwolke.de (may contain slashes)
+#   #   mirrors   — list of hosts; download tries them in order
 #   # For wms: base_url, layer, mime are used by generate_relief_tiles()
 # -----------------------------------------------------------------------------
+BAYERN_RAW_MIRRORS = [
+    "https://download1.bayernwolke.de",
+    "https://download2.bayernwolke.de",
+]
+
 BAYERN_DATASETS = {
     # ---- HEIGHT / TERRAIN (raw) ----
+    # NOTE: DGM tiles live under the "dgm/" group prefix on bayernwolke —
+    # not the flat /a/dgm1/ path used for DOP. The metalink index at
+    # geodaten.bayern.de/odd/a/dgm/dgm1/ confirms this grouping.
     "dgm1": {
         "label": "DGM1 — Digital Terrain Model (Height, 1 m)",
         "category": "height",
@@ -56,7 +69,7 @@ BAYERN_DATASETS = {
         "pixel_size_m": 1.0,
         "avg_tile_mb": 4,
         "kind": "raw",
-        "url_key": "dgm1",
+        "url_path": "dgm/dgm1",
     },
     "dgm5": {
         "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
@@ -67,7 +80,7 @@ BAYERN_DATASETS = {
         "pixel_size_m": 5.0,
         "avg_tile_mb": 0.2,
         "kind": "raw",
-        "url_key": "dgm5",
+        "url_path": "dgm/dgm5",
     },
     # ---- ORTHOPHOTOS (raw) ----
     "dop20": {
@@ -79,7 +92,7 @@ BAYERN_DATASETS = {
         "pixel_size_m": 0.2,
         "avg_tile_mb": 300,
         "kind": "raw",
-        "url_key": "dop20",
+        "url_path": "dop20",
     },
     "dop40": {
         "label": "DOP40 RGB — Orthophoto 40 cm",
@@ -90,7 +103,7 @@ BAYERN_DATASETS = {
         "pixel_size_m": 0.4,
         "avg_tile_mb": 75,
         "kind": "raw",
-        "url_key": "dop40",
+        "url_path": "dop40",
     },
     # ---- 3D BUILDINGS ----
     "lod2": {
@@ -101,7 +114,7 @@ BAYERN_DATASETS = {
         "resolution": "2 km tiles",
         "avg_tile_mb": 3,
         "kind": "raw",
-        "url_key": "lod2",
+        "url_path": "lod2",
     },
     # ---- LASER / LIDAR ----
     "laser": {
@@ -112,7 +125,7 @@ BAYERN_DATASETS = {
         "resolution": "point cloud",
         "avg_tile_mb": 800,
         "kind": "raw",
-        "url_key": "laser",
+        "url_path": "laser",
     },
     # ---- WMS-RENDERED (visual) ----
     "relief_wms": {
@@ -421,10 +434,10 @@ class MapDownloader:
             if not meta or meta.get("kind") != "raw":
                 print(f"[WARN] Unknown or non-raw Bayern dataset '{dataset}' — nothing to generate.")
                 return []
-            url_key = meta["url_key"]
+            # Accept legacy "url_key" as a fallback so existing configs still work.
+            url_path = meta.get("url_path") or meta.get("url_key")
             ext = meta["ext"]
-            base_url = f"https://download1.bayernwolke.de/a/{url_key}/data"
-            # DGM1 is typically .tif (already set above)
+            base_url = f"{BAYERN_RAW_MIRRORS[0]}/a/{url_path}/data"
             
             for x in range(start_x, end_x, grid_res):
                 for y in range(start_y, end_y, grid_res):
