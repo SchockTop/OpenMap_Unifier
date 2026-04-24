@@ -51,7 +51,7 @@ except ImportError:
 #   kind         — "raw" (direct tile file) or "wms" (rendered tile)
 #   # For raw:
 #   #   url_path  — full path under /a/ on bayernwolke.de (may contain slashes)
-#   #   mirrors   — list of hosts; download tries them in order
+#   #   grid_km   — tile size in km (default 1). DGM5 is 2 km on the AdV grid.
 #   # For wms: base_url, layer, mime are used by generate_relief_tiles()
 # -----------------------------------------------------------------------------
 BAYERN_RAW_MIRRORS = [
@@ -76,15 +76,20 @@ BAYERN_DATASETS = {
         "url_path": "dgm/dgm1",
     },
     "dgm5": {
+        # DGM5 ships on the 2 km x 2 km AdV tile grid — NOT the 1 km grid
+        # DOP/DGM1 use. If we step the polygon at 1 km we hit odd-km tile
+        # IDs that don't exist and every tile 404s. grid_km=2 makes us
+        # emit only the even-km IDs the server actually has.
         "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
         "category": "height",
-        "description": "Coarser 5m grid — useful for large areas where DGM1 would be too big.",
+        "description": "Coarser 5m grid on 2 km AdV tiles — useful for large areas where DGM1 would be too big.",
         "ext": ".tif",
         "resolution": "5 m / pixel",
         "pixel_size_m": 5.0,
-        "avg_tile_mb": 0.2,
+        "avg_tile_mb": 0.8,
         "kind": "raw",
         "url_path": "dgm/dgm5",
+        "grid_km": 2,
     },
     # ---- ORTHOPHOTOS (raw) ----
     "dop20": {
@@ -412,39 +417,43 @@ class MapDownloader:
 
     def generate_1km_grid_files(self, polygon_wkt, dataset="dgm1"):
         """
-        Generates URLs for raw data tiles (1km x 1km) based on the standard OpenData naming convention.
-        Grid aligned to 1000m steps in EPSG:25832.
-        Nomenclature often: 32<East_km>_<North_km> (e.g., 32672_5424)
+        Generate URLs for raw data tiles that intersect the polygon.
+
+        Grid step is per-dataset: DOP/DGM1 tiles are 1 km x 1 km, DGM5 (and
+        other AdV 2 km datasets) step by 2 km. We snap to the dataset's grid
+        so we never emit tile IDs that don't exist on the server.
+        Nomenclature: 32<East_km>_<North_km> in EPSG:25832, e.g. "32672_5424".
         """
         try:
             if ";" in polygon_wkt:
                 polygon_wkt = polygon_wkt.split(";", 1)[1]
-            
+
             poly = loads(polygon_wkt)
             transformer = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
             projected_poly = Polygon([transformer.transform(x, y) for x, y in poly.exterior.coords])
-            
-            minx, miny, maxx, maxy = projected_poly.bounds
-            grid_res = 1000
-            start_x = math.floor(minx / grid_res) * grid_res
-            start_y = math.floor(miny / grid_res) * grid_res
-            end_x = math.ceil(maxx / grid_res) * grid_res
-            end_y = math.ceil(maxy / grid_res) * grid_res
-            
-            files = []
 
-            # Derive base URL + extension from the dataset catalog (single source of truth).
+            # Derive base URL, extension, and grid step from the catalog.
             meta = BAYERN_DATASETS.get(dataset)
             if not meta or meta.get("kind") != "raw":
                 print(f"[WARN] Unknown or non-raw Bayern dataset '{dataset}' — nothing to generate.")
                 return []
             # url_path is the ENTIRE path segment between /a/ and the tile filename.
-            # DOP uses ".../data/", DGM uses just ".../<dgm1|dgm5>/" — we no longer
-            # append "/data" unconditionally. Accept legacy "url_key" as a fallback.
+            # Accept legacy "url_key" as a fallback.
             url_path = meta.get("url_path") or meta.get("url_key")
             ext = meta["ext"]
             base_url = f"{BAYERN_RAW_MIRRORS[0]}/a/{url_path}"
-            
+
+            grid_km = int(meta.get("grid_km", 1))
+            grid_res = grid_km * 1000
+
+            minx, miny, maxx, maxy = projected_poly.bounds
+            start_x = math.floor(minx / grid_res) * grid_res
+            start_y = math.floor(miny / grid_res) * grid_res
+            end_x = math.ceil(maxx / grid_res) * grid_res
+            end_y = math.ceil(maxy / grid_res) * grid_res
+
+            files = []
+
             for x in range(start_x, end_x, grid_res):
                 for y in range(start_y, end_y, grid_res):
                     tile_box = box(x, y, x + grid_res, y + grid_res)

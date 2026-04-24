@@ -101,6 +101,34 @@ class TestCatalogShape(unittest.TestCase):
                 )
                 self.assertTrue(url.endswith(".tif"), url)
 
+    def test_dgm5_snaps_to_2km_grid(self):
+        # DGM5 tiles only exist on the 2 km AdV grid (even km coords).
+        # Stepping at 1 km gives us phantom tiles like 32725_5431 that 404.
+        # Guard: every generated DGM5 tile's easting/northing must be even.
+        dl = MapDownloader(download_dir="downloads_test")
+        # Big enough polygon to span several 2 km tiles.
+        poly = (
+            "SRID=4326;POLYGON(("
+            "11.50 48.10, 11.55 48.10, 11.55 48.14, 11.50 48.14, 11.50 48.10"
+            "))"
+        )
+        files = dl.generate_1km_grid_files(poly, dataset="dgm5")
+        self.assertTrue(files, "dgm5 produced no tiles")
+        for fname, _url in files:
+            # fname looks like "32724_5430.tif" — strip "32" and ".tif",
+            # split on "_", both halves must be even km.
+            stem = fname.rsplit(".", 1)[0]
+            self.assertTrue(stem.startswith("32"), fname)
+            east_km, north_km = stem[2:].split("_")
+            self.assertEqual(
+                int(east_km) % 2, 0,
+                f"{fname}: easting {east_km} must be even for 2 km grid",
+            )
+            self.assertEqual(
+                int(north_km) % 2, 0,
+                f"{fname}: northing {north_km} must be even for 2 km grid",
+            )
+
     def test_dop_keeps_data_segment(self):
         # Sister guard: DOP20/DOP40 DO have /data/ in the path (verified
         # against the repo's dop20rgb.meta4). Make sure our refactor didn't
