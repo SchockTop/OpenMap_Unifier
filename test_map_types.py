@@ -57,7 +57,7 @@ def build_raw_url(dataset_key, tile_id="32672_5424", mirror=None):
     meta = BAYERN_DATASETS[dataset_key]
     url_path = meta.get("url_path") or meta.get("url_key")
     host = mirror or BAYERN_RAW_MIRRORS[0]
-    return f"{host}/a/{url_path}/data/{tile_id}{meta['ext']}"
+    return f"{host}/a/{url_path}/{tile_id}{meta['ext']}"
 
 
 class TestCatalogShape(unittest.TestCase):
@@ -84,14 +84,31 @@ class TestCatalogShape(unittest.TestCase):
                     self.assertIn("layer", meta)
                     self.assertIn("mime", meta)
 
-    def test_dgm_uses_grouped_path(self):
-        # Regression guard: DGM tiles MUST live under the dgm/ group prefix.
-        # The flat /a/dgm1/ path was the bug that broke the height download.
+    def test_dgm_uses_grouped_path_without_data_segment(self):
+        # Regression guard for the height-download bug. DGM tiles live at
+        #   /a/dgm/dgm1/<tile>.tif   and   /a/dgm/dgm5/<tile>.tif
+        # — the dgm/ group prefix IS present, and the /data/ segment is NOT
+        # (this was confirmed against Bavaria's published .meta4 metalinks).
         for key in ("dgm1", "dgm5"):
             with self.subTest(dataset=key):
                 url = build_raw_url(key)
-                self.assertIn(f"/a/dgm/{key}/data/", url, url)
+                self.assertIn(f"/a/dgm/{key}/", url, url)
+                self.assertNotIn(
+                    f"/a/dgm/{key}/data/",
+                    url,
+                    f"{key}: URL must NOT contain /data/ — metalinks put tiles"
+                    f" directly under /a/dgm/{key}/. Got: {url}",
+                )
                 self.assertTrue(url.endswith(".tif"), url)
+
+    def test_dop_keeps_data_segment(self):
+        # Sister guard: DOP20/DOP40 DO have /data/ in the path (verified
+        # against the repo's dop20rgb.meta4). Make sure our refactor didn't
+        # strip it for the datasets that need it.
+        for key in ("dop20", "dop40"):
+            with self.subTest(dataset=key):
+                url = build_raw_url(key)
+                self.assertIn(f"/a/{key}/data/", url, url)
 
     def test_generate_1km_grid_files_for_every_raw_dataset(self):
         dl = MapDownloader(download_dir="downloads_test")
@@ -102,8 +119,14 @@ class TestCatalogShape(unittest.TestCase):
                 files = dl.generate_1km_grid_files(MUNICH_POLYGON_WKT, dataset=key)
                 self.assertTrue(files, f"{key}: no tiles generated")
                 fname, url = files[0]
+                # url_path is the full segment between /a/ and the tile file.
+                # We expect the URL to end in /a/<url_path>/<tile><ext>.
                 url_path = meta.get("url_path") or meta.get("url_key")
-                self.assertIn(f"/a/{url_path}/data/", url, url)
+                self.assertIn(f"/a/{url_path}/", url, url)
+                self.assertTrue(
+                    url.endswith(f"/{fname}"),
+                    f"{key}: url {url!r} should end with /{fname}",
+                )
                 self.assertTrue(
                     url.endswith(meta["ext"]),
                     f"{key}: url {url!r} should end with {meta['ext']!r}",
