@@ -28,11 +28,15 @@ except ImportError:
 # =============================================================================
 # Single source of truth for which datasets the GUI offers.
 # All raw tile datasets follow the same 1km x 1km grid (EPSG:25832) and the
-# URL pattern: https://<mirror>/a/<url_path>/data/<tile_id><ext>
+# URL pattern: https://<mirror>/a/<url_path>/<tile_id><ext>
 # where <tile_id> is derived from easting/northing km (e.g. "32672_5424") and
-# <url_path> can include a group prefix (e.g. "dgm/dgm1"), mirroring the
-# Bavarian opendata metalink layout at
-# https://geodaten.bayernwolke.de/odd/a/<url_path>/meta/metalink/09.meta4
+# <url_path> is the ENTIRE path between /a/ and the tile filename. The shape
+# varies by dataset — DOP tiles live under .../data/, DGM tiles do not:
+#   DOP20  -> /a/dop20/data/32672_5424.tif    url_path = "dop20/data"
+#   DGM1   -> /a/dgm/dgm1/32672_5424.tif      url_path = "dgm/dgm1"
+#   DGM5   -> /a/dgm/dgm5/32672_5424.tif      url_path = "dgm/dgm5"
+# Confirmed against Bavaria's opendata metalinks (.meta4) — the DGM entries
+# do NOT include a /data/ segment, which is what was breaking the download.
 #
 # License: Bayerische Vermessungsverwaltung — CC BY 4.0
 # Attribution (recommended): "Datenquelle: Bayerische Vermessungsverwaltung
@@ -92,7 +96,7 @@ BAYERN_DATASETS = {
         "pixel_size_m": 0.2,
         "avg_tile_mb": 300,
         "kind": "raw",
-        "url_path": "dop20",
+        "url_path": "dop20/data",
     },
     "dop40": {
         "label": "DOP40 RGB — Orthophoto 40 cm",
@@ -103,7 +107,7 @@ BAYERN_DATASETS = {
         "pixel_size_m": 0.4,
         "avg_tile_mb": 75,
         "kind": "raw",
-        "url_path": "dop40",
+        "url_path": "dop40/data",
     },
     # ---- 3D BUILDINGS ----
     "lod2": {
@@ -114,7 +118,7 @@ BAYERN_DATASETS = {
         "resolution": "2 km tiles",
         "avg_tile_mb": 3,
         "kind": "raw",
-        "url_path": "lod2",
+        "url_path": "lod2/data",
     },
     # ---- LASER / LIDAR ----
     "laser": {
@@ -125,7 +129,7 @@ BAYERN_DATASETS = {
         "resolution": "point cloud",
         "avg_tile_mb": 800,
         "kind": "raw",
-        "url_path": "laser",
+        "url_path": "laser/data",
     },
     # ---- WMS-RENDERED (visual) ----
     "relief_wms": {
@@ -434,10 +438,12 @@ class MapDownloader:
             if not meta or meta.get("kind") != "raw":
                 print(f"[WARN] Unknown or non-raw Bayern dataset '{dataset}' — nothing to generate.")
                 return []
-            # Accept legacy "url_key" as a fallback so existing configs still work.
+            # url_path is the ENTIRE path segment between /a/ and the tile filename.
+            # DOP uses ".../data/", DGM uses just ".../<dgm1|dgm5>/" — we no longer
+            # append "/data" unconditionally. Accept legacy "url_key" as a fallback.
             url_path = meta.get("url_path") or meta.get("url_key")
             ext = meta["ext"]
-            base_url = f"{BAYERN_RAW_MIRRORS[0]}/a/{url_path}/data"
+            base_url = f"{BAYERN_RAW_MIRRORS[0]}/a/{url_path}"
             
             for x in range(start_x, end_x, grid_res):
                 for y in range(start_y, end_y, grid_res):
