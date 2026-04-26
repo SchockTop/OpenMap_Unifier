@@ -125,13 +125,20 @@ BAYERN_DATASETS = {
     # ---- 3D BUILDINGS ----
     "lod2": {
         "label": "LoD2 — 3D building models (CityGML)",
+        # LoD2 lives at /a/lod2/citygml/<east>_<north>.gml on the 2 km AdV
+        # grid — verified against the live metalink at
+        # https://geodaten.bayern.de/odd/a/lod2/citygml/meta/metalink/09.meta4
+        # Marienplatz (UTM ~691, 5334) snaps to even km -> 690_5334.gml
+        # which downloads as ~150 MB. Was 404'ing on /lod2/data/ + .zip.
         "category": "buildings",
-        "description": "CityGML with building volumes at Level-of-Detail 2 (roof shapes).",
-        "ext": ".zip",
+        "description": "CityGML with building volumes at Level-of-Detail 2 (roof shapes). 2 km tiles.",
+        "ext": ".gml",
         "resolution": "2 km tiles",
-        "avg_tile_mb": 3,
+        "avg_tile_mb": 50,
         "kind": "raw",
-        "url_path": "lod2/data",
+        "url_path": "lod2/citygml",
+        "grid_km": 2,
+        "tile_prefix": "",
     },
     # ---- LASER / LIDAR ----
     "laser": {
