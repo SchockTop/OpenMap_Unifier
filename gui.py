@@ -658,10 +658,18 @@ class OpenMapUnifierApp(ctk.CTk):
             self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
         self.run_downloads_batch(files)
 
+        meta = BAYERN_DATASETS.get(key, {})
+
+        # If the dataset ships as zipped XYZ-ASCII (DGM5xyz), unpack each .zip
+        # in place and delete the archive — leaves only the .txt the user
+        # actually wants. Done before worldfile generation so the .txt
+        # filenames are visible to any later post-processing.
+        if meta.get("unzip"):
+            self._unzip_bayern_folder(out_dir, key)
+
         # After downloads finish, write .tfw + .prj sidecars so Blender GIS
         # (and any other georef-aware tool) can batch-import without the
         # "Unable to read georef infos from worldfile or geotiff tags" error.
-        meta = BAYERN_DATASETS.get(key, {})
         pixel = meta.get("pixel_size_m")
         if pixel and meta.get("ext") in (".tif", ".tiff"):
             try:
@@ -670,6 +678,32 @@ class OpenMapUnifierApp(ctk.CTk):
                       f"({skipped} non-Bayern filenames skipped).")
             except Exception as e:
                 print(f"[WARN] {key}: worldfile generation failed: {e}")
+
+    @staticmethod
+    def _unzip_bayern_folder(out_dir, key):
+        """Unpack every .zip in ``out_dir`` and delete the archive on success.
+
+        Used by DGM5xyz: each tile is a .zip whose payload is a single XYZ
+        .txt. We extract straight into ``out_dir`` so downstream tools see
+        flat filenames matching the tile naming scheme.
+        """
+        import zipfile
+        unpacked, failed = 0, 0
+        for fname in os.listdir(out_dir):
+            if not fname.lower().endswith(".zip"):
+                continue
+            zip_path = os.path.join(out_dir, fname)
+            try:
+                with zipfile.ZipFile(zip_path) as zf:
+                    zf.extractall(out_dir)
+                os.remove(zip_path)
+                unpacked += 1
+            except (zipfile.BadZipFile, OSError) as e:
+                # Don't delete a malformed download — keep it for diagnosis.
+                print(f"[WARN] {key}: failed to unpack {fname}: {e}")
+                failed += 1
+        print(f"[INFO] {key}: unpacked {unpacked} zip(s) "
+              f"({failed} failed) in {out_dir}")
 
     def _run_bayern_wms(self, poly, key, fmt, high_res, out_dir):
         """Download a WMS-rendered Bayern dataset (relief, dop40_wms)."""

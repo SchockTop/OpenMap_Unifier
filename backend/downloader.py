@@ -73,7 +73,10 @@ BAYERN_DATASETS = {
         # like "729_5433.tif" at https://download1.bayernwolke.de/a/dgm/dgm1/.
         "label": "DGM1 — Digital Terrain Model (Height, 1 m)",
         "category": "height",
-        "description": "Bare-earth elevation, 1m grid, GeoTIFF. THIS is real height data for Blender/3D.",
+        "description": "Bare-earth elevation, 1m grid, single-band float32 GeoTIFF. "
+                       "This is real height data — use QGIS / Blender GIS / GDAL. "
+                       "Windows Photos shows it as solid white because the pixel "
+                       "values are metres, not 0–255 RGB; that's expected.",
         "ext": ".tif",
         "resolution": "1 m / pixel",
         "pixel_size_m": 1.0,
@@ -83,21 +86,29 @@ BAYERN_DATASETS = {
         "tile_prefix": "",
     },
     "dgm5": {
-        # DGM5 also drops the "32" UTM prefix (same /a/dgm/ group as DGM1).
-        # Bavaria's DGM5 ships on the 2 km AdV tile grid per their docs,
-        # so grid_km=2 keeps us on even-km coords. If a live metalink
-        # shows 1 km spacing, set grid_km=1.
-        "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
+        # Bavaria distributes DGM5 as XYZ-ASCII (one easting/northing/height
+        # per line) bundled inside a .zip per tile — NOT as GeoTIFF. The URL
+        # path therefore lives at /a/dgm/dgm5xyz/, the file extension is
+        # .zip, and the GUI unpacks the .txt inside after each download
+        # (drop the zip, keep the txt). Confirmed against issue #12.
+        "label": "DGM5 — Digital Terrain Model (Height, 5 m, XYZ-ASCII)",
         "category": "height",
-        "description": "Coarser 5m grid on 2 km AdV tiles — useful for large areas where DGM1 would be too big.",
-        "ext": ".tif",
-        "resolution": "5 m / pixel",
-        "pixel_size_m": 5.0,
-        "avg_tile_mb": 0.8,
+        "description": "Bare-earth elevation as XYZ-ASCII inside a .zip; "
+                       "after download the GUI extracts the .txt and removes the zip. "
+                       "Useful for large areas where DGM1 would be too big.",
+        "ext": ".zip",
+        "resolution": "5 m / point",
+        "avg_tile_mb": 1.5,
         "kind": "raw",
-        "url_path": "dgm/dgm5",
-        "grid_km": 2,
+        "url_path": "dgm/dgm5xyz",
+        # XYZ-ASCII tiles use the same 1 km grid as DGM1 (one zip per
+        # easting/northing-km pair). The previous 2 km assumption was for
+        # the (no-longer-published) DGM5 GeoTIFF on the AdV grid.
+        "grid_km": 1,
         "tile_prefix": "",
+        # Tells the GUI's post-download step to unpack each .zip and discard
+        # the archive, leaving just the XYZ .txt files in the output folder.
+        "unzip": True,
     },
     # ---- ORTHOPHOTOS (raw) ----
     "dop20": {
