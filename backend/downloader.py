@@ -215,6 +215,26 @@ class MapDownloader:
         return f"{int(m)}m {int(s)}s"
 
     def download_file(self, url, file_name, progress_callback=None):
+        """Download a tile, transparently falling through to alt mirrors on failure.
+
+        ``url`` may be either a single URL string or a list/tuple of mirror
+        URLs. If multiple are given we try them in order and only report the
+        download as failed when every mirror has been exhausted. This is the
+        thing that keeps DGM1 / DGM5 height-tile batches alive when one of
+        Bavaria's bayernwolke mirrors flaps or the user's corporate proxy
+        only routes one of them.
+        """
+        # Normalise to a list of mirrors. Filter out empty/None defensively.
+        if isinstance(url, str):
+            mirrors = [url]
+        else:
+            mirrors = [u for u in (url or []) if u]
+        if not mirrors:
+            print(f"[ERROR] {file_name}: no URLs to try.")
+            if progress_callback:
+                progress_callback(file_name, 0, "Error: no URL", "-", "-")
+            return False
+
         target_path = os.path.join(self.download_dir, file_name)
         part_path = target_path + ".part"
 
@@ -239,8 +259,35 @@ class MapDownloader:
             except OSError:
                 pass
 
+        last_error = None
+        for idx, current_url in enumerate(mirrors):
+            mirror_label = f"mirror {idx + 1}/{len(mirrors)}" if len(mirrors) > 1 else None
+            ok, err = self._download_one(
+                current_url, file_name, target_path, part_path,
+                progress_callback, mirror_label,
+            )
+            if ok:
+                return True
+            last_error = err
+            # Cancellation should not bleed into "try next mirror".
+            if self.stop_event:
+                return False
+            if idx < len(mirrors) - 1:
+                print(f"[INFO] {file_name}: {mirror_label} failed ({err}), "
+                      f"trying next mirror...")
+
+        # All mirrors exhausted.
+        print(f"[ERROR] Download failed for {file_name}: {last_error}")
         if progress_callback:
-            progress_callback(file_name, 0, "Connecting...", "-", "-")
+            progress_callback(file_name, 0, last_error or "Error", "-", "-")
+        return False
+
+    def _download_one(self, url, file_name, target_path, part_path,
+                      progress_callback, mirror_label):
+        """Single-URL download attempt. Returns (ok, error_message)."""
+        if progress_callback:
+            label = f"Connecting ({mirror_label})..." if mirror_label else "Connecting..."
+            progress_callback(file_name, 0, label, "-", "-")
 
         start_time = time.time()
         try:
@@ -267,23 +314,23 @@ class MapDownloader:
                             os.remove(part_path)
                         except OSError:
                             pass
-                        return False
+                        return False, "Cancelled"
 
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
-                        
+
                         if progress_callback and total_size > 0:
                             elapsed = time.time() - start_time
                             percent = int((downloaded / total_size) * 100)
-                            
+
                             speed = downloaded / elapsed if elapsed > 0 else 0
                             speed_str = f"{self.format_bytes(speed)}/s"
-                            
+
                             remaining = total_size - downloaded
                             eta = remaining / speed if speed > 0 else 0
                             eta_str = self.format_time(eta)
-                            
+
                             current_str = self.format_bytes(downloaded)
                             total_str = self.format_bytes(total_size)
                             status_msg = f"{current_str} / {total_str}"
@@ -298,9 +345,7 @@ class MapDownloader:
                     pass
                 msg = f"Truncated: got {downloaded} of {total_size} bytes"
                 print(f"[ERROR] {file_name}: {msg}")
-                if progress_callback:
-                    progress_callback(file_name, 0, msg, "-", "-")
-                return False
+                return False, msg
 
             # Atomic rename: .part -> final name. Only now is the tile visible
             # as "exists" to the skip-check on subsequent runs.
@@ -309,13 +354,11 @@ class MapDownloader:
             except OSError as e:
                 msg = f"Rename failed: {e}"
                 print(f"[ERROR] {file_name}: {msg}")
-                if progress_callback:
-                    progress_callback(file_name, 0, msg, "-", "-")
-                return False
+                return False, msg
 
             if progress_callback:
                 progress_callback(file_name, 100, "Completed", "-", "-")
-            return True
+            return True, None
         except Exception as e:
             # Ensure no stale .part survives an exception.
             try:
@@ -332,12 +375,16 @@ class MapDownloader:
                     user_msg = f"Error: {e}"
             else:
                 user_msg = f"Error: {e}"
-            print(f"[ERROR] Download failed for {file_name}: {user_msg}")
-            if progress_callback:
-                progress_callback(file_name, 0, user_msg, "-", "-")
-            return False
+            return False, user_msg
 
     def parse_metalink(self, file_path):
+        """Parse a .meta4 file. Returns [(name, [mirror_url, ...]), ...].
+
+        Keeps every ``<url>`` per ``<file>`` so download_file can fall through
+        them on 4xx/5xx. Earlier versions returned only the first mirror,
+        which is what made height tiles fail whenever bayernwolke download1
+        was blocked / slow even though download2 was fine.
+        """
         try:
             tree = ET.parse(file_path)
             root = tree.getroot()
@@ -345,13 +392,12 @@ class MapDownloader:
             for elem in root.iter():
                 if elem.tag.endswith('file'):
                     name = elem.get('name')
-                    url = None
+                    urls = []
                     for child in elem:
-                        if child.tag.endswith('url'):
-                            url = child.text
-                            break
-                    if name and url:
-                        files.append((name, url))
+                        if child.tag.endswith('url') and child.text:
+                            urls.append(child.text.strip())
+                    if name and urls:
+                        files.append((name, urls))
             return files
         except Exception as e:
             print(f"[ERROR] Metalink parse error: {e}")
@@ -464,7 +510,10 @@ class MapDownloader:
             # Accept legacy "url_key" as a fallback.
             url_path = meta.get("url_path") or meta.get("url_key")
             ext = meta["ext"]
-            base_url = f"{BAYERN_RAW_MIRRORS[0]}/a/{url_path}"
+            # Build one base URL per mirror so download_file can fall through
+            # them. Critical for height (DGM1/DGM5) batches where one mirror
+            # being slow / blocked / 5xx used to fail every single tile.
+            base_urls = [f"{m}/a/{url_path}" for m in BAYERN_RAW_MIRRORS]
 
             grid_km = int(meta.get("grid_km", 1))
             grid_res = grid_km * 1000
@@ -493,9 +542,9 @@ class MapDownloader:
                         tile_id = f"{tile_prefix}{east_km}_{north_km}"
 
                         file_name = f"{tile_id}{ext}"
-                        url = f"{base_url}/{file_name}"
-                        files.append((file_name, url))
-                        
+                        urls = [f"{base}/{file_name}" for base in base_urls]
+                        files.append((file_name, urls))
+
             return files
         except Exception as e:
             print(f"[ERROR] generating raw grid: {e}")
