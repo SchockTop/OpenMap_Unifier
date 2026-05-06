@@ -61,10 +61,14 @@ class OpenMapUnifierApp(ctk.CTk):
         self.title("OpenMap Unifier")
         self.geometry("1100x800")
         
-        # Initialize proxy manager
+        # Initialize proxy manager. Anchor the config dir to the script's
+        # directory (not CWD) so settings persist no matter where the user
+        # launches gui.py from — fixes the "proxy host/username forgotten
+        # between sessions" bug reported in the to-do list.
         self.proxy_manager = None
         if PROXY_AVAILABLE:
-            self.proxy_manager = get_proxy_manager(config_dir=".")
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            self.proxy_manager = get_proxy_manager(config_dir=script_dir)
             # Respect saved config: only auto-detect if user hasn't saved manual
             # settings, or explicitly chose auto-detect mode. This prevents
             # auto_detect() from clobbering saved manual host/username/auth_type.
@@ -1152,7 +1156,7 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         
         self.proxy_manager = proxy_manager
         self.title("Proxy & SSL Settings")
-        self.geometry("560x620")
+        self.geometry("600x720")
         self.resizable(False, False)
         
         # Make modal
@@ -1239,20 +1243,41 @@ class ProxySettingsDialog(ctk.CTkToplevel):
                       command=self._browse_ca_bundle,
                       fg_color="gray30", hover_color="gray40").pack(side="left")
 
+        # Bypass list — comma-separated hosts that skip the proxy.
+        bypass_row = ctk.CTkFrame(ssl_frame, fg_color="transparent")
+        bypass_row.pack(fill="x", padx=10, pady=(0, 8))
+        ctk.CTkLabel(bypass_row, text="No-proxy hosts:", width=120, anchor="w").pack(side="left")
+        self.entry_no_proxy = ctk.CTkEntry(bypass_row,
+                                           placeholder_text="localhost,127.0.0.1,*.local")
+        self.entry_no_proxy.pack(side="left", fill="x", expand=True, padx=5)
+
         # --- Status / Info ---
-        self.lbl_status = ctk.CTkLabel(container, text="", font=("Roboto", 11), text_color="gray60")
-        self.lbl_status.pack(pady=10)
-        
+        self.lbl_status = ctk.CTkLabel(container, text="", font=("Roboto", 11),
+                                       text_color="gray60", wraplength=500,
+                                       justify="left")
+        self.lbl_status.pack(pady=(8, 2))
+
+        # Show where the config gets written so users can confirm persistence.
+        cfg_path = os.path.join(self.proxy_manager.config_dir,
+                                self.proxy_manager.CONFIG_FILE)
+        ctk.CTkLabel(container,
+                     text=f"Config: {os.path.abspath(cfg_path)}  "
+                          "(password is NEVER stored on disk)",
+                     font=("Roboto", 9), text_color="gray45",
+                     wraplength=500, justify="left").pack(pady=(0, 6))
+
         # --- Buttons ---
         btn_frame = ctk.CTkFrame(container, fg_color="transparent")
         btn_frame.pack(fill="x", pady=10)
-        
+
         ctk.CTkButton(btn_frame, text="Auto-Detect Now", command=self.do_auto_detect, fg_color="#555", width=130).pack(side="left", padx=5)
         ctk.CTkButton(btn_frame, text="Test Connection", command=self.do_test_connection, fg_color="#3498db", width=130).pack(side="left", padx=5)
-        
+        ctk.CTkButton(btn_frame, text="Reset", command=self.do_reset,
+                      fg_color="#7a2a2a", hover_color="#a33", width=80).pack(side="right", padx=5)
+
         btn_frame2 = ctk.CTkFrame(container, fg_color="transparent")
         btn_frame2.pack(fill="x", pady=5)
-        
+
         ctk.CTkButton(btn_frame2, text="Save & Close", command=self.do_save, fg_color="#27ae60", width=150).pack(side="right", padx=5)
         ctk.CTkButton(btn_frame2, text="Cancel", command=self.destroy, fg_color="#555", width=100).pack(side="right", padx=5)
         
@@ -1294,6 +1319,10 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         self.var_ssl_verify.set(config.ssl_verify)
         self.entry_ca_bundle.delete(0, "end")
         self.entry_ca_bundle.insert(0, config.ca_bundle_path)
+
+        # Bypass list
+        self.entry_no_proxy.delete(0, "end")
+        self.entry_no_proxy.insert(0, config.no_proxy)
 
         self.on_mode_change()
         self.on_auth_change(self.seg_auth.get())
@@ -1389,48 +1418,78 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         self.lbl_status.configure(text="\n".join(lines), text_color=color)
     
     def apply_settings(self, save=True):
-        """Apply form settings to proxy manager."""
+        """Apply form settings to proxy manager.
+
+        Persists every form field to ``proxy_manager.config`` regardless of
+        the active mode, so the user's host / username / auth type / domain /
+        bypass list aren't silently dropped when they switch between Auto,
+        Manual, and No-Proxy. (Earlier versions only persisted the manual
+        block, which is what the to-do list flagged as 'not saving the proxy
+        host and username and other options I set before'.)
+        """
         mode = self.var_mode.get()
+        auth_map = {"None": "none", "Basic": "basic", "NTLM": "ntlm"}
 
-        if mode == "none":
-            self.proxy_manager.disable_proxy()
-        elif mode == "auto":
-            self.proxy_manager.auto_detect()
-        else:  # manual
-            auth_map = {"None": "none", "Basic": "basic", "NTLM": "ntlm"}
-            auth_type = auth_map.get(self.seg_auth.get(), "none")
-            username = self.entry_username.get()
-            password = self.entry_password.get()
+        # Snapshot every form value upfront — these are the user's intent.
+        form_proxy_url = self.entry_proxy_url.get().strip()
+        form_auth_type = auth_map.get(self.seg_auth.get(), "none")
+        form_username  = self.entry_username.get()
+        form_password  = self.entry_password.get()
+        form_domain    = self.entry_domain.get()
+        form_no_proxy  = self.entry_no_proxy.get().strip()
 
-            # Catch a very common footgun: user saved once, reopened the
-            # dialog, didn't re-enter the password (it wasn't persisted to
-            # disk), and clicks Save. Without this guard we'd silently
-            # overwrite the still-in-memory password with "" and the next
-            # request returns 407.
-            if auth_type in ("basic", "ntlm") and username and not password:
-                existing = self.proxy_manager.config.password
-                if existing:
-                    password = existing
-                    self.lbl_status.configure(
-                        text="ℹ Using password from current session "
-                             "(field was empty)",
-                        text_color="#f39c12",
-                    )
-                else:
-                    self.lbl_status.configure(
-                        text="⚠ Password is empty — proxy will return 407",
-                        text_color="#e74c3c",
-                    )
+        cfg = self.proxy_manager.config
 
-            self.proxy_manager.set_manual_proxy(
-                proxy_url=self.entry_proxy_url.get(),
-                auth_type=auth_type,
-                username=username,
-                password=password,
-                domain=self.entry_domain.get()
+        # Always persist the credential metadata. None of these are secrets;
+        # losing them on a mode switch is the bug we're fixing.
+        cfg.username  = form_username
+        cfg.auth_type = form_auth_type
+        cfg.domain    = form_domain
+        cfg.no_proxy  = form_no_proxy or "localhost,127.0.0.1"
+
+        # Password lives in memory only. Use what was typed; otherwise keep
+        # whatever's already in memory (avoids the classic "reopened dialog,
+        # didn't retype password, saved → 407" footgun).
+        if form_password:
+            cfg.password = form_password
+        elif form_auth_type in ("basic", "ntlm") and form_username and not cfg.password:
+            self.lbl_status.configure(
+                text="⚠ Password is empty — proxy will return 407",
+                text_color="#e74c3c",
+            )
+        elif form_auth_type in ("basic", "ntlm") and form_username and cfg.password:
+            self.lbl_status.configure(
+                text="ℹ Using password from current session (field was empty)",
+                text_color="#f39c12",
             )
 
-        # SSL settings apply regardless of proxy mode.
+        # Mode-specific behaviour. We always remember the typed proxy_url
+        # too — even in "none" mode — so the user can flip modes without
+        # losing their settings.
+        if mode == "none":
+            cfg.enabled = False
+            cfg.auto_detect = False
+            if form_proxy_url:
+                cfg.proxy_url = form_proxy_url
+            self.proxy_manager._session = None
+            print("[PROXY] Mode: NO PROXY (settings remembered for later).")
+        elif mode == "auto":
+            cfg.auto_detect = True
+            self.proxy_manager.auto_detect()
+            # If auto-detect found nothing but the user typed a URL, keep it
+            # so they don't lose it on the next open.
+            if not cfg.proxy_url and form_proxy_url:
+                cfg.proxy_url = form_proxy_url
+        else:  # manual
+            cfg.proxy_url = form_proxy_url
+            cfg.enabled = bool(form_proxy_url)
+            cfg.auto_detect = False
+            self.proxy_manager._session = None
+            if form_proxy_url:
+                print(f"[PROXY] Manual proxy configured: {form_proxy_url} "
+                      f"(auth: {form_auth_type})")
+
+        # SSL settings always apply.
         self.proxy_manager.set_ssl(
             ssl_verify=bool(self.var_ssl_verify.get()),
             ca_bundle_path=self.entry_ca_bundle.get().strip(),
@@ -1438,11 +1497,38 @@ class ProxySettingsDialog(ctk.CTkToplevel):
 
         if save:
             self.proxy_manager.save_config()
-    
+
     def do_save(self):
         """Save settings and close."""
         self.apply_settings(save=True)
         self.destroy()
+
+    def do_reset(self):
+        """Wipe the saved proxy_config.json and reset the form to defaults."""
+        if not messagebox.askyesno(
+            "Reset proxy settings?",
+            "Delete the saved proxy configuration and reset all fields to "
+            "defaults?\n\nThe in-memory password is also cleared.",
+        ):
+            return
+
+        cfg_path = os.path.join(self.proxy_manager.config_dir,
+                                self.proxy_manager.CONFIG_FILE)
+        try:
+            if os.path.exists(cfg_path):
+                os.remove(cfg_path)
+                print(f"[PROXY] Deleted {cfg_path}")
+        except OSError as e:
+            messagebox.showwarning("Reset failed", f"Couldn't delete:\n{cfg_path}\n\n{e}")
+            return
+
+        # Re-init config in memory and refresh the dialog.
+        from backend.proxy_manager import ProxyConfig
+        self.proxy_manager.config = ProxyConfig()
+        self.proxy_manager._session = None
+        self.load_current_settings()
+        self.lbl_status.configure(text="✓ Proxy settings reset to defaults.",
+                                  text_color="#27ae60")
 
 if __name__ == "__main__":
     app = OpenMapUnifierApp()
