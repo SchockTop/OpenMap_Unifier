@@ -7,6 +7,7 @@ import threading
 import sys
 import os
 import time
+import json
 
 import subprocess
 
@@ -95,6 +96,12 @@ class OpenMapUnifierApp(ctk.CTk):
         self.setup_downloads_tab()
         self.setup_help_tab()
         self.setup_console_tab()
+
+        # Restore Bayern-specific settings (dataset checkboxes, high-res, format).
+        self._load_bayern_config()
+
+        # Persist Bayern settings on close.
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def setup_console_tab(self):
         self.console_text = ctk.CTkTextbox(self.tab_console, font=("Consolas", 12))
@@ -235,6 +242,65 @@ class OpenMapUnifierApp(ctk.CTk):
         self.download_list.pack(fill="both", expand=True, padx=5, pady=5)
         
         self.download_rows = {} # Map filename -> widgets
+
+    # =========================================================================
+    # Bayern settings persistence (Issue #11)
+    # =========================================================================
+    _BAYERN_CONFIG_FILE = "bayern_config.json"
+
+    def _bayern_config_path(self):
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(script_dir, self._BAYERN_CONFIG_FILE)
+
+    def _load_bayern_config(self):
+        """Load saved Bayern-specific settings (dataset checkboxes, high-res, format)."""
+        path = self._bayern_config_path()
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception as e:
+            print(f"[WARN] Could not load {path}: {e}")
+            return
+
+        # Dataset checkboxes
+        saved_datasets = cfg.get("datasets", {})
+        for key, var in self.bayern_dataset_vars.items():
+            if key in saved_datasets:
+                var.set(bool(saved_datasets[key]))
+
+        # High-res WMS toggle
+        if "high_res" in cfg:
+            if cfg["high_res"]:
+                self.chk_high_res_relief.select()
+            else:
+                self.chk_high_res_relief.deselect()
+
+        # DOP40 WMS format
+        if "wms_format" in cfg and cfg["wms_format"] in ("JPG", "TIF"):
+            self.seg_format.set(cfg["wms_format"])
+
+        print("[INIT] Bayern settings restored from bayern_config.json.")
+
+    def _save_bayern_config(self):
+        """Persist Bayern-specific settings to JSON."""
+        cfg = {
+            "datasets": {k: v.get() for k, v in self.bayern_dataset_vars.items()},
+            "high_res": self.chk_high_res_relief.get() == 1,
+            "wms_format": self.seg_format.get(),
+        }
+        path = self._bayern_config_path()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception as e:
+            print(f"[WARN] Could not save {path}: {e}")
+
+    def _on_close(self):
+        """Handle window close — save settings then destroy."""
+        self._save_bayern_config()
+        self.destroy()
 
     # =========================================================================
     # Downloads tab — overview + clear + license attribution
@@ -1191,6 +1257,9 @@ class ProxySettingsDialog(ctk.CTkToplevel):
         ctk.CTkLabel(self.manual_frame, text="Proxy URL:", anchor="w").pack(fill="x", padx=10, pady=(10, 0))
         self.entry_proxy_url = ctk.CTkEntry(self.manual_frame, placeholder_text="http://proxy.company.com:8080")
         self.entry_proxy_url.pack(fill="x", padx=10, pady=5)
+
+        # Auto-switch to Manual mode when user starts typing a proxy URL (Issue #10).
+        self.entry_proxy_url.bind("<Key>", self._on_proxy_url_keypress)
         
         # Authentication Type
         ctk.CTkLabel(self.manual_frame, text="Authentication:", anchor="w").pack(fill="x", padx=10, pady=(10, 0))
@@ -1336,6 +1405,14 @@ class ProxySettingsDialog(ctk.CTkToplevel):
             self.entry_ca_bundle.delete(0, "end")
             self.entry_ca_bundle.insert(0, path)
     
+    def _on_proxy_url_keypress(self, event):
+        """Auto-switch to Manual mode when the user types in the proxy URL field."""
+        # Ignore modifier-only keys (Shift, Ctrl, Alt, etc.)
+        if event.char and event.char.isprintable():
+            if self.var_mode.get() != "manual":
+                self.var_mode.set("manual")
+                self.on_mode_change()
+
     def on_mode_change(self):
         """Handle mode radio button change."""
         mode = self.var_mode.get()

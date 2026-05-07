@@ -8,6 +8,7 @@ import uvicorn
 import shutil
 import os
 import asyncio
+import tempfile
 from typing import List
 
 from backend.geometry import PolygonExtractor
@@ -24,8 +25,8 @@ progress_state = {}
 
 class ProgressManager:
     @staticmethod
-    async def update_progress(file_name, percent, status):
-        progress_state[file_name] = {"percent": percent, "status": status}
+    def update_progress(file_name, percent, status, speed="-", eta="-"):
+        progress_state[file_name] = {"percent": percent, "status": status, "speed": speed, "eta": eta}
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -43,8 +44,12 @@ async def analyze_kml(file: UploadFile = File(...)):
 async def start_download_metalink(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     content = await file.read()
     downloader = MapDownloader()
-    
-    files_to_download = downloader.parse_metalink(content)
+
+    # parse_metalink expects a file path, not raw bytes — write to a temp file first.
+    with tempfile.NamedTemporaryFile(suffix=".meta4", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    files_to_download = downloader.parse_metalink(tmp_path)
     if not files_to_download:
         return JSONResponse(status_code=400, content={"error": "No files found in metalink"})
     
@@ -59,10 +64,13 @@ async def start_download_metalink(background_tasks: BackgroundTasks, file: Uploa
 async def run_metalink_download(files, downloader):
     # Limit concurrency
     semaphore = asyncio.Semaphore(5)
-    
+    loop = asyncio.get_event_loop()
+
     async def task(fname, url):
         async with semaphore:
-            await downloader.download_file(url, fname, ProgressManager.update_progress)
+            await loop.run_in_executor(
+                None, downloader.download_file, url, fname, ProgressManager.update_progress
+            )
 
     await asyncio.gather(*[task(f, u) for f, u in files])
 
@@ -84,10 +92,14 @@ async def start_download_relief(background_tasks: BackgroundTasks, polygon: str 
 
 async def run_relief_download(tiles, downloader):
     semaphore = asyncio.Semaphore(5)
+    loop = asyncio.get_event_loop()
+
     async def task(fname, url):
         async with semaphore:
-            await downloader.download_file(url, fname, ProgressManager.update_progress)
-            
+            await loop.run_in_executor(
+                None, downloader.download_file, url, fname, ProgressManager.update_progress
+            )
+
     await asyncio.gather(*[task(f, u) for f, u in tiles])
 
 @app.get("/progress")

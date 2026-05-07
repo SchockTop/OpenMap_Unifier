@@ -83,20 +83,20 @@ BAYERN_DATASETS = {
         "tile_prefix": "",
     },
     "dgm5": {
-        # DGM5 also drops the "32" UTM prefix (same /a/dgm/ group as DGM1).
-        # Bavaria's DGM5 ships on the 2 km AdV tile grid per their docs,
-        # so grid_km=2 keeps us on even-km coords. If a live metalink
-        # shows 1 km spacing, set grid_km=1.
+        # DGM5 XYZ: Bavaria serves DGM5 as zipped XYZ text files at
+        # /a/dgm/dgm5xyz/ on the 1 km grid (same spacing as DGM1).
+        # Confirmed against live metalink — the old "dgm/dgm5" + ".tif"
+        # path was returning 404s.
         "label": "DGM5 — Digital Terrain Model (Height, 5 m)",
         "category": "height",
-        "description": "Coarser 5m grid on 2 km AdV tiles — useful for large areas where DGM1 would be too big.",
-        "ext": ".tif",
+        "description": "Coarser 5m grid, zipped XYZ — useful for large areas where DGM1 would be too big.",
+        "ext": ".zip",
         "resolution": "5 m / pixel",
         "pixel_size_m": 5.0,
         "avg_tile_mb": 0.8,
         "kind": "raw",
-        "url_path": "dgm/dgm5",
-        "grid_km": 2,
+        "url_path": "dgm/dgm5xyz",
+        "grid_km": 1,
         "tile_prefix": "",
     },
     # ---- ORTHOPHOTOS (raw) ----
@@ -210,9 +210,14 @@ class MapDownloader:
 
     def format_time(self, seconds):
         if seconds < 60:
-            return f"{int(seconds)}s"
-        m, s = divmod(seconds, 60)
-        return f"{int(m)}m {int(s)}s"
+            return f"{seconds:.0f}s"
+        elif seconds < 3600:
+            m, s = divmod(int(seconds), 60)
+            return f"{m}m {s}s"
+        else:
+            h, rem = divmod(int(seconds), 3600)
+            m, s = divmod(rem, 60)
+            return f"{h}h {m}m"
 
     def download_file(self, url, file_name, progress_callback=None):
         """Download a tile, transparently falling through to alt mirrors on failure.
