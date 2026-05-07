@@ -86,20 +86,22 @@ class TestCatalogShape(unittest.TestCase):
 
     def test_dgm_uses_grouped_path_without_data_segment(self):
         # Regression guard for the height-download bug. DGM tiles live at
-        #   /a/dgm/dgm1/<tile>.tif   and   /a/dgm/dgm5/<tile>.tif
+        #   /a/dgm/dgm1/<tile>.tif   and   /a/dgm/dgm5xyz/<tile>.zip
         # — the dgm/ group prefix IS present, and the /data/ segment is NOT
         # (this was confirmed against Bavaria's published .meta4 metalinks).
         for key in ("dgm1", "dgm5"):
             with self.subTest(dataset=key):
+                meta = BAYERN_DATASETS[key]
+                url_path = meta.get("url_path") or meta.get("url_key")
                 url = build_raw_url(key)
-                self.assertIn(f"/a/dgm/{key}/", url, url)
+                self.assertIn(f"/a/{url_path}/", url, url)
                 self.assertNotIn(
-                    f"/a/dgm/{key}/data/",
+                    "/data/",
                     url,
                     f"{key}: URL must NOT contain /data/ — metalinks put tiles"
-                    f" directly under /a/dgm/{key}/. Got: {url}",
+                    f" directly under /a/{url_path}/. Got: {url}",
                 )
-                self.assertTrue(url.endswith(".tif"), url)
+                self.assertTrue(url.endswith(meta["ext"]), url)
 
     def test_polygon_z_altitude_is_tolerated(self):
         # Google Earth often exports KML with altitude per vertex, which
@@ -134,12 +136,10 @@ class TestCatalogShape(unittest.TestCase):
         self.assertTrue(relief_3d, "relief: POLYGON Z yielded no tiles")
         self.assertEqual(sorted(relief_2d), sorted(relief_3d))
 
-    def test_dgm5_snaps_to_2km_grid(self):
-        # DGM5 tiles only exist on the 2 km AdV grid (even km coords).
-        # Stepping at 1 km gives us phantom tiles that 404.
-        # Guard: every generated DGM5 tile's easting/northing must be even.
+    def test_dgm5_uses_1km_grid(self):
+        # DGM5 XYZ-ASCII tiles live on a 1 km grid (same as DGM1).
+        # They are ZIP files at /a/dgm/dgm5xyz/<east>_<north>.zip.
         dl = MapDownloader(download_dir="downloads_test")
-        # Big enough polygon to span several 2 km tiles.
         poly = (
             "SRID=4326;POLYGON(("
             "11.50 48.10, 11.55 48.10, 11.55 48.14, 11.50 48.14, 11.50 48.10"
@@ -147,21 +147,13 @@ class TestCatalogShape(unittest.TestCase):
         )
         files = dl.generate_1km_grid_files(poly, dataset="dgm5")
         self.assertTrue(files, "dgm5 produced no tiles")
-        for fname, _url in files:
-            # DGM5 filenames are "<east>_<north>.tif" with NO "32" prefix.
+        for fname, _urls in files:
+            # DGM5 filenames are "<east>_<north>.zip" with NO "32" prefix.
+            self.assertTrue(fname.endswith(".zip"), f"{fname} should end with .zip")
             stem = fname.rsplit(".", 1)[0]
             self.assertFalse(
                 stem.startswith("32"),
                 f"{fname}: DGM5 tiles must NOT carry the '32' UTM prefix",
-            )
-            east_km, north_km = stem.split("_")
-            self.assertEqual(
-                int(east_km) % 2, 0,
-                f"{fname}: easting {east_km} must be even for 2 km grid",
-            )
-            self.assertEqual(
-                int(north_km) % 2, 0,
-                f"{fname}: northing {north_km} must be even for 2 km grid",
             )
 
     def test_dgm_tile_filenames_have_no_utm_prefix(self):
@@ -180,16 +172,20 @@ class TestCatalogShape(unittest.TestCase):
         )
         for dataset in ("dgm1", "dgm5"):
             with self.subTest(dataset=dataset):
+                meta = BAYERN_DATASETS[dataset]
                 files = dl.generate_1km_grid_files(poly, dataset=dataset)
                 self.assertTrue(files, f"{dataset}: no tiles")
-                for fname, url in files:
+                for fname, urls in files:
                     self.assertFalse(
                         fname.startswith("32"),
                         f"{dataset}: filename {fname!r} still has '32' prefix",
                     )
-                    # Tile IDs should match Bavaria's metalink pattern exactly.
-                    self.assertRegex(fname, r"^\d{3}_\d{4}\.tif$", fname)
-                    self.assertNotIn("/32", url.rsplit("/", 1)[-1])
+                    # Tile IDs should match Bavaria's pattern.
+                    ext = meta["ext"].replace(".", r"\.")
+                    self.assertRegex(fname, rf"^\d{{3}}_\d{{4}}{ext}$", fname)
+                    # Check first mirror URL doesn't have /32 in filename part.
+                    first_url = urls[0] if isinstance(urls, list) else urls
+                    self.assertNotIn("/32", first_url.rsplit("/", 1)[-1])
 
     def test_dop_keeps_data_segment(self):
         # Sister guard: DOP20/DOP40 DO have /data/ in the path (verified
@@ -208,7 +204,9 @@ class TestCatalogShape(unittest.TestCase):
             with self.subTest(dataset=key):
                 files = dl.generate_1km_grid_files(MUNICH_POLYGON_WKT, dataset=key)
                 self.assertTrue(files, f"{key}: no tiles generated")
-                fname, url = files[0]
+                fname, urls = files[0]
+                # urls is now a list of mirror URLs.
+                url = urls[0] if isinstance(urls, list) else urls
                 # url_path is the full segment between /a/ and the tile file.
                 # We expect the URL to end in /a/<url_path>/<tile><ext>.
                 url_path = meta.get("url_path") or meta.get("url_key")
