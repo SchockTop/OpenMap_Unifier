@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import struct
+import threading
 import zipfile
 from pathlib import Path
 
@@ -282,7 +283,27 @@ def test_live_cutout_auerbach(tmp_path):
     ll = [tf.transform(x, y) for x, y in corners]
     ewkt = "SRID=4326;POLYGON((" + ", ".join(f"{lon} {lat}" for lon, lat in ll) + "))"
 
-    meta = dommesh.cutout(ewkt, str(tmp_path), formats=("obj", "glb"))
+    # Wall-clock guard: the live download must never wedge the test (a stalled
+    # mirror once hung this for 15+ min). Run cutout() on a daemon thread and
+    # fail fast if it overruns; the abandoned thread dies with the process.
+    LIVE_TIMEOUT_S = 300
+    box: dict = {}
+
+    def _run():
+        try:
+            box["meta"] = dommesh.cutout(ewkt, str(tmp_path), formats=("obj", "glb"))
+        except BaseException as ex:  # noqa: BLE001 - re-raised on the main thread
+            box["exc"] = ex
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=LIVE_TIMEOUT_S)
+    if worker.is_alive():
+        pytest.fail(f"dommesh.cutout() did not finish within {LIVE_TIMEOUT_S} s "
+                    "(live DOM-Mesh download stalled?)")
+    if "exc" in box:
+        raise box["exc"]
+    meta = box["meta"]
     assert "error" not in meta, meta
     assert meta["triangles"] > 1000
     assert meta["leaf_nodes"] >= 1
