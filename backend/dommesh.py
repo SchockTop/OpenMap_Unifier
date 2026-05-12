@@ -502,3 +502,125 @@ class SlpkReader:
         self._nodes = out
         Path(cache).write_text(json.dumps(out))
         return self._nodes
+
+
+# --------------------------------------------------------------------------- #
+# cutout() — public entry point                                                #
+# --------------------------------------------------------------------------- #
+ProgressFn = Callable[..., None]
+
+
+def cutout(polygon_ewkt: str, out_dir: str, formats: tuple[str, ...] = ("obj", "glb"),
+           progress: Optional[ProgressFn] = None, *,
+           cache_root: Optional[str] = None,
+           _reader_factory=None, _los_index_factory=None) -> dict:
+    """Cut a DOM-Mesh slice for `polygon_ewkt` (Google Earth KML polygon as
+    EWKT/WGS84) into `out_dir`. Writes the requested `formats` ("obj", "glb")
+    plus meta.json. Returns the meta dict, or {"error": "..."} on a known
+    failure (no coverage / no overlapping mesh). `progress(name, percent,
+    status, speed="-", eta="-")` is called per node so it plugs into the GUI
+    download list and the web progress_state."""
+    t0 = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    cache_root = cache_root or os.path.join(out_dir, ".dommesh_cache")
+    name_tag = "dommesh"
+
+    def _tick(pct, status):
+        if progress:
+            progress(name_tag, int(pct), status, "-", "-")
+
+    poly = polygon_from_ewkt(polygon_ewkt)
+    minx, miny, maxx, maxy = poly.bounds
+    bbox = (minx, miny, maxx, maxy)
+    anchor = (math.floor(minx), math.floor(miny))
+
+    li_factory = _los_index_factory or (lambda: LosIndex(
+        cached_kml_path=os.path.join(cache_root, "losindex.kml"), download=True))
+    los_ids = li_factory().los_ids_for_point(*poly.representative_point().coords[0])
+    if not los_ids:
+        return {"error": "This area isn't covered by Bayern's DOM-Mesh, "
+                         "or no flight-day Los matched the polygon."}
+    if len(los_ids) > 1:
+        print(f"[WARN] dommesh: AOI overlaps {len(los_ids)} Los ({los_ids}); "
+              f"using {los_ids[0]}.")
+
+    reader = None
+    leaves: list[dict] = []
+    chosen = None
+    rf = _reader_factory or (lambda lid: SlpkReader(lid, cache_root))
+    for lid in los_ids:
+        _tick(2, f"Indexing Los {lid}…")
+        r = rf(lid)
+        nds = r.nodes()
+        sel = [nd for nd in nds if aabb_overlaps(nd, bbox)]
+        if sel:
+            reader, leaves, chosen = r, sel, lid
+            break
+    if not leaves:
+        return {"error": "No mesh nodes overlap your polygon."}
+    leaves.sort(key=lambda nd: nd["i"])
+
+    submeshes: list[SubMesh] = []
+    done = 0
+    total = len(leaves)
+
+    def _fetch_node(nd: dict) -> Optional[SubMesh]:
+        try:
+            g = reader.read_entry(f"nodes/{nd['geom_res']}/geometries/0.bin.gz")
+            tex = reader.read_entry(f"nodes/{nd['mat_res']}/textures/0.jpg")
+        except Exception as ex:  # noqa: BLE001
+            print(f"[WARN] dommesh: skip node {nd['i']}: {ex}")
+            return None
+        vcount, pos, uv = decode_geometry(g)
+        if vcount == 0:
+            return None
+        ocx, ocy, ocz = nd["cx"], nd["cy"], nd["cz"]
+        wx = [ocx + pos[3 * k] for k in range(vcount)]
+        wy = [ocy + pos[3 * k + 1] for k in range(vcount)]
+        wz = [ocz + pos[3 * k + 2] for k in range(vcount)]
+        tris, used, remap = clip_triangles(wx, wy, poly)
+        if not tris:
+            return None
+        verts = [(wx[v] - anchor[0], wy[v] - anchor[1], wz[v]) for v in used]
+        uvs = [(uv[2 * v], 1.0 - uv[2 * v + 1]) for v in used]
+        rtris = [(remap[a], remap[b], remap[c]) for a, b, c in tris]
+        return SubMesh(node_id=nd["i"], verts=verts, uvs=uvs, tris=rtris, jpeg=tex)
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_fetch_node, nd): nd for nd in leaves}
+        for fut in as_completed(futs):
+            sm = fut.result()
+            if sm is not None:
+                submeshes.append(sm)
+            done += 1
+            _tick(2 + 90 * done / total, f"Fetching mesh nodes {done}/{total}…")
+
+    if not submeshes:
+        return {"error": "No mesh nodes overlap your polygon."}
+    submeshes.sort(key=lambda s: s.node_id)
+
+    _tick(95, "Writing files…")
+    if "obj" in formats:
+        write_obj(out_dir, submeshes, anchor)
+    if "glb" in formats:
+        write_glb(os.path.join(out_dir, "cutout.glb"), submeshes, anchor)
+
+    nverts = sum(len(s.verts) for s in submeshes)
+    ntris = sum(len(s.tris) for s in submeshes)
+    meta = {
+        "losid": chosen,
+        "slpk": f"{SLPK_MIRRORS[0]}/p/dom-mesh-slpk/{chosen}/DSM_Mesh.slpk",
+        "polygon_epsg25832": [list(c) for c in poly.exterior.coords],
+        "bbox_epsg25832": list(bbox),
+        "anchor_epsg25832": list(anchor),
+        "leaf_nodes": len(submeshes),
+        "vertices": nverts,
+        "triangles": ntris,
+        "bytes_fetched": getattr(reader, "bytes_fetched", None),
+        "seconds": round(time.time() - t0, 1),
+        "files": [f for f, on in (("cutout.obj", "obj" in formats),
+                                  ("cutout.glb", "glb" in formats)) if on] + ["meta.json"],
+    }
+    Path(os.path.join(out_dir, "meta.json")).write_text(json.dumps(meta, indent=1))
+    _tick(100, "Completed")
+    return meta

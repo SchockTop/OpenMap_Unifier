@@ -207,3 +207,64 @@ def test_local_header_payload_offset():
     extra = b"\x01\x00\x08\x00" + b"\x00" * 8
     hdr = b"PK\x03\x04" + b"\x00" * 22 + struct.pack("<HH", len(name), len(extra)) + name + extra
     assert dommesh._payload_offset(hdr, 1000) == 1000 + 30 + len(name) + len(extra)
+
+
+class _FakeReader:
+    """Stands in for SlpkReader: one leaf node, one triangle inside the AOI."""
+    def __init__(self, *_a, **_k):
+        self.bytes_fetched = 1234
+    def nodes(self):
+        return [{"i": 9, "cx": 690000.0, "cy": 5506000.0, "cz": 400.0,
+                 "hx": 50.0, "hy": 50.0, "hz": 30.0, "geom_res": 0, "mat_res": 0}]
+    def read_entry(self, name):
+        if name.endswith(".jpg"):
+            return b"\xff\xd8\xff\xd9"
+        # geometry: a triangle whose vertices sit ~ at the node center (so its
+        # centroid lands inside any AOI that contains the center).
+        verts = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]
+        uvs = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+        blob = struct.pack("<II", 3, 1)
+        for x, y, z in verts:
+            blob += struct.pack("<fff", x, y, z)
+        for u, v in uvs:
+            blob += struct.pack("<ff", u, v)
+        return blob
+
+
+class _FakeLosIndex:
+    def __init__(self, *_a, **_k):
+        pass
+    def los_ids_for_point(self, e, n):
+        return ["999999_0"]
+
+
+def test_cutout_writes_obj_glb_meta(tmp_path):
+    # A ~200 m square around the fake node center, in WGS84 EWKT.
+    from pyproj import Transformer
+    tf = Transformer.from_crs("EPSG:25832", "EPSG:4326", always_xy=True)
+    cx, cy = 690000.0, 5506000.0
+    corners = [(cx - 100, cy - 100), (cx + 100, cy - 100),
+               (cx + 100, cy + 100), (cx - 100, cy + 100), (cx - 100, cy - 100)]
+    ll = [tf.transform(x, y) for x, y in corners]
+    ewkt = "SRID=4326;POLYGON((" + ", ".join(f"{lon} {lat}" for lon, lat in ll) + "))"
+
+    progress_calls = []
+    meta = dommesh.cutout(ewkt, str(tmp_path), formats=("obj", "glb"),
+                          progress=lambda *a, **k: progress_calls.append(a),
+                          _reader_factory=_FakeReader, _los_index_factory=_FakeLosIndex)
+    assert (tmp_path / "cutout.obj").exists()
+    assert (tmp_path / "cutout.glb").exists()
+    assert (tmp_path / "meta.json").exists()
+    assert meta["losid"] == "999999_0"
+    assert meta["triangles"] == 1 and meta["leaf_nodes"] == 1
+    assert "anchor_epsg25832" in meta and "bbox_epsg25832" in meta
+    assert progress_calls  # at least one progress tick
+
+
+def test_cutout_no_los_returns_error(tmp_path):
+    class _Empty(_FakeLosIndex):
+        def los_ids_for_point(self, e, n):
+            return []
+    meta = dommesh.cutout("SRID=4326;POLYGON((11.6 49.7, 11.61 49.7, 11.61 49.71, 11.6 49.7))",
+                          str(tmp_path), _reader_factory=_FakeReader, _los_index_factory=_Empty)
+    assert "error" in meta and "DOM-Mesh" in meta["error"]
