@@ -97,3 +97,26 @@ def test_clip_triangles_to_polygon_keeps_inside_centroids():
     assert tris == [(0, 1, 2)]
     assert used == [0, 1, 2]
     assert remap == {0: 0, 1: 1, 2: 2}
+
+
+def _tiny_submesh(node_id=42):
+    return dommesh.SubMesh(
+        node_id=node_id,
+        verts=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+        uvs=[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)],   # already V-flipped for OBJ/GLB
+        tris=[(0, 1, 2)],
+        jpeg=b"\xff\xd8\xff\xd9",                    # minimal JPEG SOI+EOI marker bytes
+    )
+
+
+def test_write_obj_emits_mtl_and_texture(tmp_path):
+    dommesh.write_obj(str(tmp_path), [_tiny_submesh(7)], anchor=(690000.0, 5506000.0))
+    obj = (tmp_path / "cutout.obj").read_text()
+    assert obj.startswith("mtllib cutout.mtl")
+    assert "o node_7" in obj
+    assert "\nv 0.0000 0.0000 0.0000" in obj
+    assert "\nvt 0.000000 0.000000" in obj
+    assert "\nf 1/1 2/2 3/3" in obj            # 1-based indices
+    mtl = (tmp_path / "cutout.mtl").read_text()
+    assert "newmtl m7" in mtl and "map_Kd tex/node_7.jpg" in mtl
+    assert (tmp_path / "tex" / "node_7.jpg").read_bytes() == b"\xff\xd8\xff\xd9"

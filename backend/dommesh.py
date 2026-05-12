@@ -24,6 +24,7 @@ import struct
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -166,3 +167,53 @@ def clip_triangles(wx: list[float], wy: list[float], polygon):
     used = sorted({v for t in tris for v in t})
     remap = {v: n for n, v in enumerate(used)}
     return tris, used, remap
+
+
+# --------------------------------------------------------------------------- #
+# Output: SubMesh + OBJ writer                                                 #
+# --------------------------------------------------------------------------- #
+@dataclass
+class SubMesh:
+    """One I3S leaf node's surviving geometry, ready to serialise.
+
+    `verts` are anchor-relative EPSG:25832 (x=easting-anchorx, y=northing-anchory,
+    z=height). `uvs` are already V-flipped (i.e. OBJ/GLB convention, origin
+    bottom-left). `tris` index into `verts`. `jpeg` is the raw texture file.
+    """
+    node_id: int
+    verts: list[tuple[float, float, float]]
+    uvs: list[tuple[float, float]]
+    tris: list[tuple[int, int, int]]
+    jpeg: bytes
+
+
+def write_obj(out_dir: str, submeshes: list[SubMesh], anchor: tuple[float, float]) -> None:
+    """Write cutout.obj + cutout.mtl + tex/node_<id>.jpg. `anchor` is only
+    recorded indirectly (verts are already anchor-relative); it is unused here
+    but kept in the signature for symmetry with write_glb / meta.json."""
+    tex_dir = os.path.join(out_dir, "tex")
+    os.makedirs(tex_dir, exist_ok=True)
+    obj = ["mtllib cutout.mtl"]
+    mtl: list[str] = []
+    vbase = 0
+    for sm in submeshes:
+        texname = f"node_{sm.node_id}.jpg"
+        with open(os.path.join(tex_dir, texname), "wb") as fh:
+            fh.write(sm.jpeg)
+        mname = f"m{sm.node_id}"
+        mtl += [f"newmtl {mname}", "Ka 1 1 1", "Kd 1 1 1", "d 1", "illum 1",
+                f"map_Kd tex/{texname}", ""]
+        obj.append(f"o node_{sm.node_id}")
+        for x, y, z in sm.verts:
+            obj.append("v %.4f %.4f %.4f" % (x, y, z))
+        for u, v in sm.uvs:
+            obj.append("vt %.6f %.6f" % (u, v))
+        obj.append(f"usemtl {mname}")
+        for a, b, c in sm.tris:
+            ia, ib, ic = vbase + a + 1, vbase + b + 1, vbase + c + 1
+            obj.append(f"f {ia}/{ia} {ib}/{ib} {ic}/{ic}")
+        vbase += len(sm.verts)
+    with open(os.path.join(out_dir, "cutout.obj"), "w") as fh:
+        fh.write("\n".join(obj) + "\n")
+    with open(os.path.join(out_dir, "cutout.mtl"), "w") as fh:
+        fh.write("\n".join(mtl) + "\n")
