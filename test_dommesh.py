@@ -58,3 +58,42 @@ def test_decode_geometry_reads_positions_and_uvs():
     assert vcount == 3
     assert pos == pytest.approx([c for vtx in verts for c in vtx])
     assert uv == pytest.approx([c for t in uvs for c in t])
+
+
+def test_polygon_from_ewkt_projects_to_utm32():
+    # A small square near Auerbach i.d.OPf. roughly (lon 11.6, lat 49.7).
+    ewkt = ("SRID=4326;POLYGON((11.60 49.70, 11.61 49.70, 11.61 49.71, "
+            "11.60 49.71, 11.60 49.70))")
+    poly = dommesh.polygon_from_ewkt(ewkt)
+    minx, miny, maxx, maxy = poly.bounds
+    # EPSG:25832 easting in the 690 km range, northing ~5.5 Mm.
+    assert 680_000 < minx < 700_000
+    assert 5_500_000 < miny < 5_520_000
+    assert maxx > minx and maxy > miny
+
+
+def test_polygon_from_ewkt_drops_z():
+    ewkt = "SRID=4326;POLYGON Z((11.6 49.7 0, 11.61 49.7 0, 11.61 49.71 0, 11.6 49.7 0))"
+    poly = dommesh.polygon_from_ewkt(ewkt)
+    assert poly.is_valid
+
+
+def test_aabb_overlaps_bbox():
+    node = {"cx": 100.0, "cy": 200.0, "hx": 10.0, "hy": 10.0}
+    assert dommesh.aabb_overlaps(node, (95, 195, 105, 205))
+    assert dommesh.aabb_overlaps(node, (90, 190, 95, 195))      # touching corner
+    assert not dommesh.aabb_overlaps(node, (200, 200, 300, 300))
+
+
+def test_clip_triangles_to_polygon_keeps_inside_centroids():
+    from shapely.geometry import Polygon
+    square = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    # vertices: world (x, y, z), one triangle inside, one outside.
+    wx = [1, 2, 1,   100, 101, 100]
+    wy = [1, 1, 2,   100, 100, 101]
+    wz = [0, 0, 0,   0, 0, 0]
+    uv = [0.0] * 12
+    tris, used, remap = dommesh.clip_triangles(wx, wy, square)
+    assert tris == [(0, 1, 2)]
+    assert used == [0, 1, 2]
+    assert remap == {0: 0, 1: 1, 2: 2}

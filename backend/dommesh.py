@@ -121,3 +121,48 @@ def decode_geometry(blob: bytes) -> tuple[int, list[float], list[float]]:
     p += vcount * 12
     uv = list(struct.unpack("<%df" % (vcount * 2), blob[p:p + vcount * 8]))
     return vcount, pos, uv
+
+
+# --------------------------------------------------------------------------- #
+# AOI math                                                                     #
+# --------------------------------------------------------------------------- #
+def polygon_from_ewkt(ewkt: str):
+    """Parse `[SRID=4326;]POLYGON((...))` (WGS84, possibly with Z) and return a
+    shapely Polygon in EPSG:25832 (X=easting, Y=northing, Z dropped)."""
+    from shapely.wkt import loads as _wkt_loads
+    from shapely.geometry import Polygon
+    from pyproj import Transformer
+
+    if ";" in ewkt:
+        ewkt = ewkt.split(";", 1)[1]
+    poly = _wkt_loads(ewkt)
+    tf = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
+    # Index c[0]/c[1] so POLYGON Z(...) (Google Earth always adds altitude)
+    # survives — we work purely in 2D on the UTM grid.
+    return Polygon([tf.transform(c[0], c[1]) for c in poly.exterior.coords])
+
+
+def aabb_overlaps(node: dict, bbox: tuple[float, float, float, float]) -> bool:
+    """2D AABB-vs-AABB overlap (inclusive). `node` has cx,cy,hx,hy; bbox is
+    (minx, miny, maxx, maxy)."""
+    return (node["cx"] + node["hx"] >= bbox[0] and node["cx"] - node["hx"] <= bbox[2]
+            and node["cy"] + node["hy"] >= bbox[1] and node["cy"] - node["hy"] <= bbox[3])
+
+
+def clip_triangles(wx: list[float], wy: list[float], polygon):
+    """Keep triangles (consecutive vertex triples) whose centroid lies inside
+    `polygon` (shapely). Returns (tris, used_vertices, remap) where tris is a
+    list of (i0,i1,i2) original indices, used_vertices is the sorted unique set,
+    and remap maps original index -> compact index."""
+    from shapely.geometry import Point
+
+    tris: list[tuple[int, int, int]] = []
+    for ti in range(len(wx) // 3):
+        i0, i1, i2 = 3 * ti, 3 * ti + 1, 3 * ti + 2
+        cx = (wx[i0] + wx[i1] + wx[i2]) / 3.0
+        cy = (wy[i0] + wy[i1] + wy[i2]) / 3.0
+        if polygon.covers(Point(cx, cy)):
+            tris.append((i0, i1, i2))
+    used = sorted({v for t in tris for v in t})
+    remap = {v: n for n, v in enumerate(used)}
+    return tris, used, remap
