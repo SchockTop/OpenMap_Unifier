@@ -499,6 +499,21 @@ class SlpkReader:
         assert len(data) == csize, (name, len(data), csize)
         return gzip.decompress(data) if name.endswith(".gz") else data
 
+    def _read_entry_from_blob(self, name: str, blob: bytes, blob_base: int) -> bytes:
+        """Carve a stored ZIP entry out of an in-memory `blob` that starts at
+        absolute offset `blob_base`. Falls back to a direct Range read if the
+        blob doesn't fully cover the entry's payload."""
+        off, csize, _u, _m = self.entries()[name]
+        rel = off - blob_base
+        if rel < 0 or blob[rel:rel + 4] != b"PK\x03\x04":
+            return self.read_entry(name)
+        fnlen, eflen = struct.unpack("<HH", blob[rel + 26:rel + 30])
+        ds = rel + 30 + fnlen + eflen
+        raw = blob[ds:ds + csize]
+        if len(raw) != csize:
+            return self.read_entry(name)
+        return gzip.decompress(raw) if name.endswith(".gz") else raw
+
     # ---- leaf node OBB list, cached ----
     def nodes(self) -> list[dict]:
         if self._nodes is not None:
@@ -507,22 +522,26 @@ class SlpkReader:
         if os.path.exists(cache):
             self._nodes = json.loads(Path(cache).read_text())
             return self._nodes
-        # Count pages from the central-directory entries (more robust than looping
-        # until 404; mirrors the proven spike's slpk_index.py approach).
-        n_pages = sum(1 for k in self.entries() if k.startswith("nodepages/"))
-        if n_pages == 0:
+        entries = self.entries()
+        np_keys = sorted(k for k in entries
+                         if k.startswith("nodepages/") and k.endswith(".json.gz"))
+        if not np_keys:
             raise RuntimeError(
                 f"{self.losid}: no 'nodepages/*' entries in the SLPK central "
                 "directory — unexpected archive layout")
+        # The nodepages local entries sit contiguously near EOF, so fetch the
+        # whole span in ONE Range request (~13 MB) and carve each .json.gz out
+        # of it — instead of ~3 small range requests per page. (Matches the
+        # spike's slpk_index.py; the per-page path was minutes of round-trips.)
+        offs = [entries[k][0] for k in np_keys]
+        lo = min(offs)
+        hi = max(entries[k][0] + entries[k][1] for k in np_keys) + 100_000
+        print(f"[INFO] dommesh: reading {len(np_keys)} nodepages "
+              f"(~{(hi - lo) / 1e6:.1f} MB span) in one request…")
+        blob = self._rng(lo, hi - 1)
         out: list[dict] = []
-        for page in range(n_pages):
-            # No try/except here: every page is known to exist (count came from
-            # the central directory), so a failure is a real error worth raising
-            # rather than silently producing an empty node list.
-            pg = json.loads(self.read_entry(f"nodepages/{page}.json.gz"))
-            if page == 0 or (page + 1) % 25 == 0 or page == n_pages - 1:
-                print(f"[INFO] dommesh: read nodepage {page + 1}/{n_pages} "
-                      f"({self.bytes_fetched / 1e6:.1f} MB fetched so far)")
+        for page, k in enumerate(np_keys):
+            pg = json.loads(self._read_entry_from_blob(k, blob, lo))
             for nd in pg.get("nodes", []):
                 if "mesh" not in nd or nd.get("children"):
                     continue
@@ -536,6 +555,8 @@ class SlpkReader:
                     "geom_res": mesh.get("geometry", {}).get("resource"),
                     "mat_res": mesh.get("material", {}).get("resource"),
                 })
+        print(f"[INFO] dommesh: {len(out)} mesh leaf nodes "
+              f"({self.bytes_fetched / 1e6:.1f} MB fetched)")
         self._nodes = out
         Path(cache).write_text(json.dumps(out))
         return self._nodes
