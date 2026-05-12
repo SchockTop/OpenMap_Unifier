@@ -22,12 +22,13 @@ import math
 import os
 import struct
 import time
-import urllib.request
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
+
+import requests
 
 LOS_INDEX_KML_URL = (
     "https://geodaten.bayern.de/odd/m/3/daten/DOMMesh/DOM_Mesh_projektgebiete_2026.kml"
@@ -311,10 +312,15 @@ def write_glb(out_path: str, submeshes: list[SubMesh], anchor: tuple[float, floa
 # --------------------------------------------------------------------------- #
 # LosIndex — which flight-day Los covers a point                               #
 # --------------------------------------------------------------------------- #
-def _http_get(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "OpenMap_Unifier/dommesh"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return r.read()
+def _http_get(url: str, session: Optional["requests.Session"] = None) -> bytes:
+    # Uses `requests` (and an optional pre-configured Session) so proxy / SSL /
+    # auth settings match the rest of OpenMap_Unifier; raw urllib would pick up
+    # the Windows registry proxy that `requests` ignores, causing it to fail in
+    # corporate networks where the other downloaders work.
+    s = session or requests
+    r = s.get(url, headers={"User-Agent": "OpenMap_Unifier/dommesh"}, timeout=60)
+    r.raise_for_status()
+    return r.content
 
 
 class LosIndex:
@@ -322,13 +328,15 @@ class LosIndex:
 
     Pass `cached_kml_path` to load a local copy (and to cache a downloaded one);
     if it doesn't exist and `download=True`, the KML is fetched once from
-    LOS_INDEX_KML_URL and written there.
+    LOS_INDEX_KML_URL and written there. `session` (a requests.Session) lets the
+    caller route the fetch through a configured proxy.
     """
-    def __init__(self, cached_kml_path: Optional[str] = None, download: bool = False):
+    def __init__(self, cached_kml_path: Optional[str] = None, download: bool = False,
+                 session: Optional["requests.Session"] = None):
         if cached_kml_path and os.path.exists(cached_kml_path):
             raw = Path(cached_kml_path).read_bytes()
         elif download:
-            raw = _http_get(LOS_INDEX_KML_URL)
+            raw = _http_get(LOS_INDEX_KML_URL, session=session)
             if cached_kml_path:
                 os.makedirs(os.path.dirname(cached_kml_path) or ".", exist_ok=True)
                 Path(cached_kml_path).write_bytes(raw)
@@ -407,11 +415,15 @@ def _entries_from_tail(tail: bytes, base: int) -> dict[str, tuple[int, int, int,
 
 
 class SlpkReader:
-    def __init__(self, losid: str, cache_root: str):
+    def __init__(self, losid: str, cache_root: str,
+                 session: Optional["requests.Session"] = None):
         self.losid = losid
         self.cache_dir = os.path.join(cache_root, losid)
         os.makedirs(self.cache_dir, exist_ok=True)
         self._mirrors = [f"{m}/p/dom-mesh-slpk/{losid}/DSM_Mesh.slpk" for m in SLPK_MIRRORS]
+        # A pre-configured Session (proxy/SSL/auth) when the caller has one,
+        # otherwise a plain one — never raw urllib (see _http_get).
+        self._session = session or requests.Session()
         self._size: Optional[int] = None
         self._entries: Optional[dict] = None
         self._nodes: Optional[list] = None
@@ -420,14 +432,18 @@ class SlpkReader:
     # ---- low-level range I/O with mirror fallback ----
     def _request(self, headers: dict):
         last = None
+        hdrs = {"User-Agent": "OpenMap_Unifier/dommesh", **headers}
         for url in self._mirrors:
             try:
-                req = urllib.request.Request(url, headers={
-                    "User-Agent": "OpenMap_Unifier/dommesh", **headers})
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    data = r.read()
-                    self.bytes_fetched += len(data)
-                    return data, r.headers  # HTTPMessage: case-insensitive .get()
+                r = self._session.get(url, headers=hdrs, timeout=120)
+                r.raise_for_status()
+                # A server that ignores Range returns 200 + the whole 99 GB body
+                # — refuse that and fall through to the next mirror.
+                if "Range" in headers and r.status_code != 206:
+                    raise RuntimeError(f"{url} ignored Range (HTTP {r.status_code})")
+                data = r.content
+                self.bytes_fetched += len(data)
+                return data, r.headers  # requests CaseInsensitiveDict: .get() case-insensitive
             except Exception as ex:  # noqa: BLE001 - we genuinely want to try the next mirror
                 last = ex
         raise RuntimeError(f"all mirrors failed for {self.losid}: {last}")
@@ -517,14 +533,15 @@ ProgressFn = Callable[..., None]
 
 def cutout(polygon_ewkt: str, out_dir: str, formats: tuple[str, ...] = ("obj", "glb"),
            progress: Optional[ProgressFn] = None, *,
-           cache_root: Optional[str] = None,
+           cache_root: Optional[str] = None, session: Optional["requests.Session"] = None,
            _reader_factory=None, _los_index_factory=None) -> dict:
     """Cut a DOM-Mesh slice for `polygon_ewkt` (Google Earth KML polygon as
     EWKT/WGS84) into `out_dir`. Writes the requested `formats` ("obj", "glb")
     plus meta.json. Returns the meta dict, or {"error": "..."} on a known
     failure (no coverage / no overlapping mesh). `progress(name, percent,
     status, speed="-", eta="-")` is called per node so it plugs into the GUI
-    download list and the web progress_state."""
+    download list and the web progress_state. Pass `session` (a requests.Session,
+    e.g. from ProxyManager.get_session()) to route all HTTP through a proxy."""
     t0 = time.time()
     os.makedirs(out_dir, exist_ok=True)
     cache_root = cache_root or os.path.join(out_dir, ".dommesh_cache")
@@ -540,7 +557,7 @@ def cutout(polygon_ewkt: str, out_dir: str, formats: tuple[str, ...] = ("obj", "
     anchor = (math.floor(minx), math.floor(miny))
 
     li_factory = _los_index_factory or (lambda: LosIndex(
-        cached_kml_path=os.path.join(cache_root, "losindex.kml"), download=True))
+        cached_kml_path=os.path.join(cache_root, "losindex.kml"), download=True, session=session))
     los_ids = li_factory().los_ids_for_point(*poly.representative_point().coords[0])
     if not los_ids:
         return {"error": "This area isn't covered by Bayern's DOM-Mesh, "
@@ -552,7 +569,7 @@ def cutout(polygon_ewkt: str, out_dir: str, formats: tuple[str, ...] = ("obj", "
     reader = None
     leaves: list[dict] = []
     chosen = None
-    rf = _reader_factory or (lambda lid: SlpkReader(lid, cache_root))
+    rf = _reader_factory or (lambda lid: SlpkReader(lid, cache_root, session=session))
     for lid in los_ids:
         _tick(2, f"Indexing Los {lid}…")
         r = rf(lid)

@@ -779,11 +779,20 @@ class OpenMapUnifierApp(ctk.CTk):
 
         label = BAYERN_DATASETS[key]["label"]
 
+        # Route HTTP through the same proxy/SSL config as the other downloaders.
+        session = None
+        if self.proxy_manager is not None:
+            try:
+                session = self.proxy_manager.get_session()
+            except Exception:
+                session = None
+
         def progress_cb(name, percent, status, speed="-", eta="-"):
             self.after(0, lambda: self.add_download_row(label, status, percent, speed, eta))
 
         try:
-            meta = cutout(poly, out_dir, formats=("obj", "glb"), progress=progress_cb)
+            meta = cutout(poly, out_dir, formats=("obj", "glb"), progress=progress_cb,
+                          session=session)
         except Exception as e:  # noqa: BLE001 - surface anything to the UI
             self.after(0, lambda: self.add_download_row(label, f"Error: {e}", 0, "-", "-"))
             print(f"[ERROR] dommesh: {e}")

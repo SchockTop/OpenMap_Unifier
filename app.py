@@ -114,10 +114,18 @@ async def run_dommesh_download(polygon: str, out_dir: str):
     from backend.dommesh import cutout
     loop = asyncio.get_event_loop()
 
+    # Route HTTP through a proxy-aware session when one is available.
+    session = None
+    try:
+        from backend.proxy_manager import get_proxy_manager
+        session = get_proxy_manager().get_session()
+    except Exception:
+        session = None
+
     def _job():
         try:
             meta = cutout(polygon, out_dir, formats=("obj", "glb"),
-                          progress=ProgressManager.update_progress)
+                          progress=ProgressManager.update_progress, session=session)
         except Exception as e:  # noqa: BLE001
             ProgressManager.update_progress("dommesh", 0, f"Error: {e}")
             return
