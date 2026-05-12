@@ -44,3 +44,17 @@ def test_parse_central_directory_returns_offsets_and_sizes():
         assert method == 0  # ZIP_STORED
         # The local file header at `offset` starts with the PK\x03\x04 signature.
         assert raw[offset:offset + 4] == b"PK\x03\x04"
+
+
+def test_decode_geometry_reads_positions_and_uvs():
+    verts = [(1.0, 2.0, 3.0), (4.0, 5.0, 6.0), (7.0, 8.0, 9.0)]
+    uvs = [(0.1, 0.2), (0.3, 0.4), (0.5, 0.6)]
+    blob = struct.pack("<II", len(verts), 1)
+    for x, y, z in verts:
+        blob += struct.pack("<fff", x, y, z)
+    for u, v in uvs:
+        blob += struct.pack("<ff", u, v)
+    vcount, pos, uv = dommesh.decode_geometry(blob)
+    assert vcount == 3
+    assert pos == pytest.approx([c for vtx in verts for c in vtx])
+    assert uv == pytest.approx([c for t in uvs for c in t])

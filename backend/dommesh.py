@@ -104,3 +104,20 @@ def _parse_cd_records(cd: bytes) -> dict[str, tuple[int, int, int, int]]:
         out[name] = (lho, csize, usize, method)
         p += 46 + fnlen + eflen + cmlen
     return out
+
+
+# --------------------------------------------------------------------------- #
+# I3S geometry decode                                                          #
+# --------------------------------------------------------------------------- #
+def decode_geometry(blob: bytes) -> tuple[int, list[float], list[float]]:
+    """I3S meshpyramids PerAttributeArray, ordering [position(f32x3), uv0(f32x2)].
+
+    Returns (vertex_count, flat_positions, flat_uvs). Non-indexed triangle soup
+    -> vertex_count is a multiple of 3 (triangle i = vertices 3i, 3i+1, 3i+2).
+    """
+    vcount, _fcount = struct.unpack("<II", blob[:8])
+    p = 8
+    pos = list(struct.unpack("<%df" % (vcount * 3), blob[p:p + vcount * 12]))
+    p += vcount * 12
+    uv = list(struct.unpack("<%df" % (vcount * 2), blob[p:p + vcount * 8]))
+    return vcount, pos, uv
