@@ -197,3 +197,13 @@ def test_los_index_point_in_polygon(tmp_path):
     assert idx.los_ids_for_point(e, n) == ["111111_0"]
     e2, n2 = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True).transform(11.6, 60.0)
     assert idx.los_ids_for_point(e2, n2) == []
+
+
+def test_local_header_payload_offset():
+    # A ZIP local file header is 30 bytes + filename + extra; the payload
+    # follows. dommesh._payload_offset(local_header_bytes, local_offset) returns
+    # the absolute byte offset of the stored data.
+    name = b"nodes/0/geometries/0.bin.gz"
+    extra = b"\x01\x00\x08\x00" + b"\x00" * 8
+    hdr = b"PK\x03\x04" + b"\x00" * 22 + struct.pack("<HH", len(name), len(extra)) + name + extra
+    assert dommesh._payload_offset(hdr, 1000) == 1000 + 30 + len(name) + len(extra)

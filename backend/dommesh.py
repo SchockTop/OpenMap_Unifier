@@ -364,3 +364,141 @@ class LosIndex:
         from shapely.geometry import Point
         p = Point(easting, northing)
         return [name for name, poly in self._polys if poly.covers(p)]
+
+
+# --------------------------------------------------------------------------- #
+# SlpkReader — HTTP-Range reader for a per-Los DSM_Mesh.slpk                    #
+# --------------------------------------------------------------------------- #
+def _payload_offset(local_header: bytes, local_offset: int) -> int:
+    """Given the first >=30 bytes of a ZIP local file header located at
+    `local_offset`, return the absolute offset of the stored payload."""
+    assert local_header[:4] == b"PK\x03\x04", local_header[:4]
+    fnlen, eflen = struct.unpack("<HH", local_header[26:30])
+    return local_offset + 30 + fnlen + eflen
+
+
+def _entries_from_tail(tail: bytes, base: int) -> dict[str, tuple[int, int, int, int]]:
+    """Like parse_central_directory but for an archive *tail* that starts at
+    absolute offset `base`; all returned local-header offsets are absolute.
+
+    `tail` is the last N bytes of the archive starting at absolute byte `base`
+    (i.e. file_size - len(tail)). We parse the EOCD64 locator/record from
+    `tail`, compute the absolute cd_off/cd_size, slice the central directory
+    as tail[cd_off-base : cd_off-base+cd_size], then run _parse_cd_records on
+    it — the lho values inside the records are already absolute (no rebasing
+    needed, they're used later as absolute byte offsets into the archive via
+    Range requests).
+    """
+    loc = tail.rfind(_EOCD64_LOCATOR_SIG)
+    if loc != -1:
+        # EOCD64 locator: offset 8 holds the absolute offset of the EOCD64 record.
+        eocd64_abs = struct.unpack("<Q", tail[loc + 8:loc + 16])[0]
+        rec = eocd64_abs - base
+        cd_size = struct.unpack("<Q", tail[rec + 40:rec + 48])[0]
+        cd_off = struct.unpack("<Q", tail[rec + 48:rec + 56])[0]
+    else:
+        e = tail.rfind(_EOCD_SIG)
+        cd_size = struct.unpack("<I", tail[e + 12:e + 16])[0]
+        cd_off = struct.unpack("<I", tail[e + 16:e + 20])[0]
+    cd = tail[cd_off - base:cd_off - base + cd_size]
+    return _parse_cd_records(cd)
+
+
+class SlpkReader:
+    def __init__(self, losid: str, cache_root: str):
+        self.losid = losid
+        self.cache_dir = os.path.join(cache_root, losid)
+        os.makedirs(self.cache_dir, exist_ok=True)
+        self._mirrors = [f"{m}/p/dom-mesh-slpk/{losid}/DSM_Mesh.slpk" for m in SLPK_MIRRORS]
+        self._size: Optional[int] = None
+        self._entries: Optional[dict] = None
+        self._nodes: Optional[list] = None
+        self.bytes_fetched = 0
+
+    # ---- low-level range I/O with mirror fallback ----
+    def _request(self, headers: dict) -> tuple[bytes, dict]:
+        last = None
+        for url in self._mirrors:
+            try:
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "OpenMap_Unifier/dommesh", **headers})
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    data = r.read()
+                    self.bytes_fetched += len(data)
+                    return data, dict(r.headers)
+            except Exception as ex:  # noqa: BLE001 - we genuinely want to try the next mirror
+                last = ex
+        raise RuntimeError(f"all mirrors failed for {self.losid}: {last}")
+
+    def _rng(self, a: int, b: int) -> bytes:
+        data, _ = self._request({"Range": f"bytes={a}-{b}"})
+        return data
+
+    def file_size(self) -> int:
+        if self._size is None:
+            data, hdrs = self._request({"Range": "bytes=0-0"})
+            cr = hdrs.get("Content-Range", "")
+            self._size = int(cr.split("/")[-1]) if "/" in cr else None
+            if not self._size:
+                raise RuntimeError("server did not report file size via Content-Range")
+        return self._size
+
+    # ---- entries (ZIP64 central directory), cached ----
+    def entries(self) -> dict[str, tuple[int, int, int, int]]:
+        if self._entries is not None:
+            return self._entries
+        cache = os.path.join(self.cache_dir, "entries.json")
+        if os.path.exists(cache):
+            raw = json.loads(Path(cache).read_text())
+            self._entries = {k: tuple(v) for k, v in raw.items()}
+            return self._entries
+        size = self.file_size()
+        tail_len = min(size, 70 * 1024 * 1024)   # comfortably covers CD + EOCD records
+        base = size - tail_len
+        tail = self._rng(base, size - 1)
+        self._entries = _entries_from_tail(tail, base)
+        Path(cache).write_text(json.dumps({k: list(v) for k, v in self._entries.items()}))
+        return self._entries
+
+    # ---- read one stored entry by name ----
+    def read_entry(self, name: str) -> bytes:
+        off, csize, _usize, _method = self.entries()[name]
+        hdr = self._rng(off, off + 30 + 512)     # local header + filename + (small) extra
+        ds = _payload_offset(hdr, off)
+        data = self._rng(ds, ds + csize - 1)
+        assert len(data) == csize, (name, len(data), csize)
+        return gzip.decompress(data) if name.endswith(".gz") else data
+
+    # ---- leaf node OBB list, cached ----
+    def nodes(self) -> list[dict]:
+        if self._nodes is not None:
+            return self._nodes
+        cache = os.path.join(self.cache_dir, "nodes.json")
+        if os.path.exists(cache):
+            self._nodes = json.loads(Path(cache).read_text())
+            return self._nodes
+        _scene = json.loads(self.read_entry("3dSceneLayer.json.gz"))
+        out: list[dict] = []
+        page = 0
+        while True:
+            try:
+                pg = json.loads(self.read_entry(f"nodepages/{page}.json.gz"))
+            except Exception:
+                break
+            for nd in pg.get("nodes", []):
+                if "mesh" not in nd or nd.get("children"):
+                    continue
+                obb = nd["obb"]
+                c, h = obb["center"], obb["halfSize"]
+                mesh = nd["mesh"]
+                out.append({
+                    "i": nd.get("index", nd.get("resourceId", page)),
+                    "cx": c[0], "cy": c[1], "cz": c[2],
+                    "hx": h[0], "hy": h[1], "hz": h[2],
+                    "geom_res": mesh.get("geometry", {}).get("resource"),
+                    "mat_res": mesh.get("material", {}).get("resource"),
+                })
+            page += 1
+        self._nodes = out
+        Path(cache).write_text(json.dumps(out))
+        return self._nodes
