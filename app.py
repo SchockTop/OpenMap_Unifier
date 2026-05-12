@@ -102,6 +102,34 @@ async def run_relief_download(tiles, downloader):
 
     await asyncio.gather(*[task(f, u) for f, u in tiles])
 
+@app.post("/start-download-dommesh")
+async def start_download_dommesh(background_tasks: BackgroundTasks, polygon: str = Form(...)):
+    out_dir = "downloads_dommesh"
+    progress_state["dommesh"] = {"percent": 0, "status": "Pending"}
+    background_tasks.add_task(run_dommesh_download, polygon, out_dir)
+    return {"message": "Download started"}
+
+
+async def run_dommesh_download(polygon: str, out_dir: str):
+    from backend.dommesh import cutout
+    loop = asyncio.get_event_loop()
+
+    def _job():
+        try:
+            meta = cutout(polygon, out_dir, formats=("obj", "glb"),
+                          progress=ProgressManager.update_progress)
+        except Exception as e:  # noqa: BLE001
+            ProgressManager.update_progress("dommesh", 0, f"Error: {e}")
+            return
+        if "error" in meta:
+            ProgressManager.update_progress("dommesh", 0, meta["error"])
+        else:
+            ProgressManager.update_progress(
+                "dommesh", 100,
+                f"Completed — {meta['triangles']} tris, Los {meta['losid']}")
+
+    await loop.run_in_executor(None, _job)
+
 @app.get("/progress")
 async def get_progress():
     return progress_state

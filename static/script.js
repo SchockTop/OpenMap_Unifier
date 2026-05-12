@@ -109,6 +109,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // --- DOM-Mesh Logic ---
+    document.getElementById('btn-dommesh').addEventListener('click', async () => {
+        const poly = polygonOutput.value.trim();
+        if (!poly) {
+            alert('Please extract a polygon first!');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('polygon', poly);
+
+        try {
+            startPolling();
+            const resp = await fetch('/start-download-dommesh', { method: 'POST', body: formData });
+            if (!resp.ok) {
+                const data = await resp.json();
+                alert('Error: ' + data.error);
+            }
+        } catch (e) {
+            alert('Start download failed: ' + e);
+        }
+    });
+
     // --- Progress Polling ---
     function startPolling() {
         if (progressInterval) return;
