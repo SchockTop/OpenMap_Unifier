@@ -23,6 +23,7 @@ import os
 import struct
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -305,3 +306,61 @@ def write_glb(out_path: str, submeshes: list[SubMesh], anchor: tuple[float, floa
         fh.write(struct.pack("<4sII", b"glTF", 2, total))
         fh.write(struct.pack("<I4s", len(json_blob), b"JSON")); fh.write(json_blob)
         fh.write(struct.pack("<I4s", len(bin_blob), b"BIN\x00")); fh.write(bin_blob)
+
+
+# --------------------------------------------------------------------------- #
+# LosIndex — which flight-day Los covers a point                               #
+# --------------------------------------------------------------------------- #
+def _http_get(url: str) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": "OpenMap_Unifier/dommesh"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read()
+
+
+class LosIndex:
+    """The DOM-Mesh project-areas KML, parsed into (los_id, shapely-Polygon-in-25832).
+
+    Pass `cached_kml_path` to load a local copy (and to cache a downloaded one);
+    if it doesn't exist and `download=True`, the KML is fetched once from
+    LOS_INDEX_KML_URL and written there.
+    """
+    def __init__(self, cached_kml_path: Optional[str] = None, download: bool = False):
+        if cached_kml_path and os.path.exists(cached_kml_path):
+            raw = Path(cached_kml_path).read_bytes()
+        elif download:
+            raw = _http_get(LOS_INDEX_KML_URL)
+            if cached_kml_path:
+                os.makedirs(os.path.dirname(cached_kml_path) or ".", exist_ok=True)
+                Path(cached_kml_path).write_bytes(raw)
+        else:
+            raise FileNotFoundError(
+                "Los index KML not available locally and download=False")
+        self._polys = self._parse(raw)
+
+    @staticmethod
+    def _parse(raw: bytes):
+        from shapely.geometry import Polygon
+        from pyproj import Transformer
+        tf = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
+        root = ET.fromstring(raw)
+        out = []
+        for pm in (e for e in root.iter() if e.tag.endswith("Placemark")):
+            name = next((c.text.strip() for c in pm.iter()
+                         if c.tag.endswith("name") and c.text), None)
+            coords_text = next((c.text.strip() for c in pm.iter()
+                                if c.tag.endswith("coordinates") and c.text), None)
+            if not name or not coords_text:
+                continue
+            pts = []
+            for token in coords_text.split():
+                parts = token.split(",")
+                if len(parts) >= 2:
+                    pts.append(tf.transform(float(parts[0]), float(parts[1])))
+            if len(pts) >= 3:
+                out.append((name, Polygon(pts)))
+        return out
+
+    def los_ids_for_point(self, easting: float, northing: float) -> list[str]:
+        from shapely.geometry import Point
+        p = Point(easting, northing)
+        return [name for name, poly in self._polys if poly.covers(p)]

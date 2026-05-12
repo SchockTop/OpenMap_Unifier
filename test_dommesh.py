@@ -173,3 +173,27 @@ def test_write_glb_maps_to_yup():
     assert first == pytest.approx((1.0, 3.0, -2.0))
     # accessor min/max present (glTF validators require it for POSITION).
     assert "min" in acc and "max" in acc
+
+
+_FAKE_LOS_KML = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+ <Placemark><name>111111_0</name><Polygon><outerBoundaryIs><LinearRing>
+   <coordinates>11.50,49.60,0 11.70,49.60,0 11.70,49.80,0 11.50,49.80,0 11.50,49.60,0</coordinates>
+ </LinearRing></outerBoundaryIs></Polygon></Placemark>
+ <Placemark><name>222222_0</name><Polygon><outerBoundaryIs><LinearRing>
+   <coordinates>12.00,50.00,0 12.10,50.00,0 12.10,50.10,0 12.00,50.10,0 12.00,50.00,0</coordinates>
+ </LinearRing></outerBoundaryIs></Polygon></Placemark>
+</Document></kml>"""
+
+
+def test_los_index_point_in_polygon(tmp_path):
+    kml_path = tmp_path / "los.kml"
+    kml_path.write_text(_FAKE_LOS_KML)
+    idx = dommesh.LosIndex(cached_kml_path=str(kml_path))
+    # A point near (11.6, 49.7) -> EPSG:25832 roughly (690k, 5506k). Use the
+    # transformer to find a coordinate inside the first polygon.
+    from pyproj import Transformer
+    e, n = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True).transform(11.6, 49.7)
+    assert idx.los_ids_for_point(e, n) == ["111111_0"]
+    e2, n2 = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True).transform(11.6, 60.0)
+    assert idx.los_ids_for_point(e2, n2) == []
