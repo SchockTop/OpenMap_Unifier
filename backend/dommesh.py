@@ -433,19 +433,28 @@ class SlpkReader:
     def _request(self, headers: dict):
         last = None
         hdrs = {"User-Agent": "OpenMap_Unifier/dommesh", **headers}
+        wants_range = "Range" in headers
         for url in self._mirrors:
+            r = None
             try:
-                r = self._session.get(url, headers=hdrs, timeout=120)
+                # stream=True so we can reject a Range-ignoring response BEFORE
+                # its body downloads — a proxy that strips Range makes the server
+                # return 200 + the whole 99 GB file, which would otherwise hang
+                # here forever with no error. (connect, read) timeouts.
+                r = self._session.get(url, headers=hdrs, timeout=(15, 120), stream=True)
                 r.raise_for_status()
-                # A server that ignores Range returns 200 + the whole 99 GB body
-                # — refuse that and fall through to the next mirror.
-                if "Range" in headers and r.status_code != 206:
-                    raise RuntimeError(f"{url} ignored Range (HTTP {r.status_code})")
+                if wants_range and r.status_code != 206:
+                    raise RuntimeError(
+                        f"{url} returned HTTP {r.status_code} for a Range request "
+                        "(a proxy/cache may be stripping the Range header)")
                 data = r.content
                 self.bytes_fetched += len(data)
                 return data, r.headers  # requests CaseInsensitiveDict: .get() case-insensitive
             except Exception as ex:  # noqa: BLE001 - we genuinely want to try the next mirror
                 last = ex
+            finally:
+                if r is not None:
+                    r.close()
         raise RuntimeError(f"all mirrors failed for {self.losid}: {last}")
 
     def _rng(self, a: int, b: int) -> bytes:
@@ -501,12 +510,19 @@ class SlpkReader:
         # Count pages from the central-directory entries (more robust than looping
         # until 404; mirrors the proven spike's slpk_index.py approach).
         n_pages = sum(1 for k in self.entries() if k.startswith("nodepages/"))
+        if n_pages == 0:
+            raise RuntimeError(
+                f"{self.losid}: no 'nodepages/*' entries in the SLPK central "
+                "directory — unexpected archive layout")
         out: list[dict] = []
         for page in range(n_pages):
-            try:
-                pg = json.loads(self.read_entry(f"nodepages/{page}.json.gz"))
-            except Exception:
-                continue
+            # No try/except here: every page is known to exist (count came from
+            # the central directory), so a failure is a real error worth raising
+            # rather than silently producing an empty node list.
+            pg = json.loads(self.read_entry(f"nodepages/{page}.json.gz"))
+            if page == 0 or (page + 1) % 25 == 0 or page == n_pages - 1:
+                print(f"[INFO] dommesh: read nodepage {page + 1}/{n_pages} "
+                      f"({self.bytes_fetched / 1e6:.1f} MB fetched so far)")
             for nd in pg.get("nodes", []):
                 if "mesh" not in nd or nd.get("children"):
                     continue
