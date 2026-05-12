@@ -488,15 +488,21 @@ class SlpkReader:
         return self._entries
 
     # ---- read one stored entry by name ----
+    _LOCAL_HDR_MAX = 30 + 1024  # 30-byte fixed header + filename + extra (always small here)
+
     def read_entry(self, name: str) -> bytes:
         off, csize, _usize, _method = self.entries()[name]
-        hdr = self._rng(off, off + 30 + 512)     # local header + filename + (small) extra
-        fnlen, eflen = struct.unpack("<HH", hdr[26:30])
-        if len(hdr) < 30 + fnlen + eflen:
-            hdr = self._rng(off, off + 30 + fnlen + eflen)
-        ds = _payload_offset(hdr, off)
-        data = self._rng(ds, ds + csize - 1)
-        assert len(data) == csize, (name, len(data), csize)
+        # One Range request, not two: over-fetch the (small) local header plus
+        # the whole payload in a single read, then slice the payload out. Halves
+        # the round-trip count — important when fetching hundreds of node files
+        # over a slow / proxied link.
+        blob = self._rng(off, off + self._LOCAL_HDR_MAX + csize - 1)
+        assert blob[:4] == b"PK\x03\x04", (name, blob[:4])
+        fnlen, eflen = struct.unpack("<HH", blob[26:30])
+        ds = 30 + fnlen + eflen
+        data = blob[ds:ds + csize]
+        if len(data) != csize:  # local header was unexpectedly large — refetch exact
+            data = self._rng(off + ds, off + ds + csize - 1)
         return gzip.decompress(data) if name.endswith(".gz") else data
 
     def _read_entry_from_blob(self, name: str, blob: bytes, blob_base: int) -> bytes:
@@ -622,6 +628,15 @@ def cutout(polygon_ewkt: str, out_dir: str, formats: tuple[str, ...] = ("obj", "
     submeshes: list[SubMesh] = []
     done = 0
     total = len(leaves)
+    # Each leaf node = one geometry blob + one JPEG (~0.2 MB) fetched over the
+    # network. A big polygon overlaps a lot of them — tell the user up front so
+    # "nothing happening" isn't a mystery.
+    print(f"[INFO] dommesh: {total} mesh nodes overlap the AOI in Los {chosen} "
+          f"(~{total * 0.2:.0f} MB to fetch); downloading…")
+    if total > 1500:
+        print(f"[WARN] dommesh: that's a large area — this will take a while and "
+              f"produce a heavy mesh. Consider a smaller polygon.")
+    _tick(3, f"Fetching {total} mesh nodes…")
 
     def _fetch_node(nd: dict) -> Optional[SubMesh]:
         try:
@@ -652,7 +667,10 @@ def cutout(polygon_ewkt: str, out_dir: str, formats: tuple[str, ...] = ("obj", "
             if sm is not None:
                 submeshes.append(sm)
             done += 1
-            _tick(2 + 90 * done / total, f"Fetching mesh nodes {done}/{total}…")
+            _tick(3 + 90 * done / total, f"Fetching mesh nodes {done}/{total}…")
+            if done == 1 or done % 25 == 0 or done == total:
+                print(f"[INFO] dommesh: fetched {done}/{total} nodes "
+                      f"({reader.bytes_fetched / 1e6:.1f} MB, {len(submeshes)} kept)")
 
     if not submeshes:
         return {"error": "No mesh nodes overlap your polygon."}
