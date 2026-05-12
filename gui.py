@@ -313,6 +313,7 @@ class OpenMapUnifierApp(ctk.CTk):
         ("Bayern: DOP20 (Orthophoto)",     os.path.join("downloads_bayern", "dop20")),
         ("Bayern: DOP40 (Orthophoto)",     os.path.join("downloads_bayern", "dop40")),
         ("Bayern: LoD2 (3D buildings)",    os.path.join("downloads_bayern", "lod2")),
+        ("Bayern: DOM-Mesh 3D",            os.path.join("downloads_bayern", "dommesh")),
         ("Bayern: Laser (LiDAR LAZ)",      os.path.join("downloads_bayern", "laser")),
         ("Bayern: Relief WMS",             os.path.join("downloads_bayern", "relief_wms")),
         ("Bayern: DOP40 WMS",              os.path.join("downloads_bayern", "dop40_wms")),

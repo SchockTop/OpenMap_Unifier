@@ -140,6 +140,20 @@ BAYERN_DATASETS = {
         "grid_km": 2,
         "tile_prefix": "",
     },
+    # ---- 3D MESH (photogrammetry, range-fetched) ----
+    "dommesh": {
+        # Range-fetched out of Bayern's per-Los DSM_Mesh.slpk (I3S) — see
+        # backend/dommesh.py. Cut to the user's KML polygon, not the 50-200 GB
+        # district archive.
+        "label": "DOM-Mesh — Photogrammetric 3D city mesh (textured)",
+        "category": "mesh3d",
+        "description": "Textured photogrammetry mesh (buildings + trees + terrain) "
+                       "cut to your polygon. Range-fetched from Bayern's SLPK — "
+                       "no multi-GB download. Writes cutout.obj + cutout.glb.",
+        "ext": ".glb",
+        "resolution": "photogrammetry mesh",
+        "kind": "mesh",
+    },
     # ---- LASER / LIDAR ----
     "laser": {
         "label": "Laser — Raw LiDAR point cloud (LAZ)",
@@ -182,6 +196,7 @@ BAYERN_CATEGORY_LABELS = {
     "buildings":  "3D Buildings",
     "laser":      "Laser / LiDAR",
     "wms_render": "Visual renders (WMS)",
+    "mesh3d":     "3D Meshes (photogrammetry)",
 }
 
 
