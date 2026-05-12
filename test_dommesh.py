@@ -18,7 +18,13 @@ from backend import dommesh
 
 
 def _build_zip64(names_and_blobs):
-    """Build an in-memory ZIP (force ZIP64) and return (bytes, {name: stored_size})."""
+    """Build an in-memory ZIP and return (bytes, {name: stored_size}).
+
+    `allowZip64=True` only *permits* ZIP64 extensions; for small test blobs
+    Python writes a plain EOCD (PK\\x05\\x06), so the ZIP64-EOCD branch of
+    `parse_central_directory` is NOT exercised here. That path is covered by
+    the live `needs_network` test added in a later task.
+    """
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
         for name, blob in names_and_blobs:

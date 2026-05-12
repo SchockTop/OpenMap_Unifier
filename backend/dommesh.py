@@ -55,12 +55,10 @@ def parse_central_directory(raw: bytes) -> dict[str, tuple[int, int, int, int]]:
     # Find the (ZIP64) EOCD locator near the end.
     loc = raw.rfind(_EOCD64_LOCATOR_SIG)
     if loc != -1:
-        eocd64_off = struct.unpack("<Q", raw[loc + 8:loc + 16])[0]
-        # eocd64_off is absolute in the real archive; when raw is the whole
-        # file this is a valid index. Locate the EOCD64 record.
-        rec = raw.find(_EOCD64_SIG, max(0, loc - (1 << 20)))
-        if rec == -1:
-            rec = raw.find(_EOCD64_SIG)
+        # The locator gives the absolute byte offset of the EOCD64 record
+        # directly; no need to scan for the PK\x06\x06 signature. This works
+        # because raw is the whole archive (a tail-aware variant comes later).
+        rec = struct.unpack("<Q", raw[loc + 8:loc + 16])[0]
         cd_size = struct.unpack("<Q", raw[rec + 40:rec + 48])[0]
         cd_off = struct.unpack("<Q", raw[rec + 48:rec + 56])[0]
     else:
