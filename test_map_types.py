@@ -69,7 +69,7 @@ class TestCatalogShape(unittest.TestCase):
                 self.assertIn("label", meta)
                 self.assertIn("category", meta)
                 self.assertIn("kind", meta)
-                self.assertIn(meta["kind"], {"raw", "wms"})
+                self.assertIn(meta["kind"], {"raw", "wms", "mesh"})
                 if meta["kind"] == "raw":
                     self.assertTrue(
                         meta.get("url_path") or meta.get("url_key"),
@@ -79,10 +79,15 @@ class TestCatalogShape(unittest.TestCase):
                         meta["ext"].startswith("."),
                         f"{key}: ext must start with '.'",
                     )
-                else:  # wms
+                elif meta["kind"] == "wms":
                     self.assertIn("base_url", meta)
                     self.assertIn("layer", meta)
                     self.assertIn("mime", meta)
+                else:  # mesh — range-fetched from a per-Los SLPK; no per-tile URL
+                    self.assertTrue(
+                        meta["ext"].startswith("."),
+                        f"{key}: ext must start with '.'",
+                    )
 
     def test_dgm_uses_grouped_path_without_data_segment(self):
         # Regression guard for the height-download bug. DGM tiles live at
