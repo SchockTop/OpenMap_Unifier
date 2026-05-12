@@ -217,3 +217,91 @@ def write_obj(out_dir: str, submeshes: list[SubMesh], anchor: tuple[float, float
         fh.write("\n".join(obj) + "\n")
     with open(os.path.join(out_dir, "cutout.mtl"), "w") as fh:
         fh.write("\n".join(mtl) + "\n")
+
+
+# --------------------------------------------------------------------------- #
+# Output: GLB writer (binary glTF 2.0)                                         #
+# --------------------------------------------------------------------------- #
+def _pad4(b: bytes, fill: bytes = b"\x00") -> bytes:
+    return b + fill * ((4 - len(b) % 4) % 4)
+
+
+def write_glb(out_path: str, submeshes: list[SubMesh], anchor: tuple[float, float]) -> None:
+    """Write a single binary glTF 2.0 file. One mesh/material/image/node per
+    submesh. POSITION is (easting, height, -northing) so the model is Y-up like
+    every other glTF (Blender's importer applies its own Z-up correction)."""
+    bin_parts: list[bytes] = []
+    bin_len = 0
+    buffer_views: list[dict] = []
+    accessors: list[dict] = []
+    images: list[dict] = []
+    samplers = [{"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497}]
+    textures: list[dict] = []
+    materials: list[dict] = []
+    meshes: list[dict] = []
+    nodes: list[dict] = []
+
+    def add_view(blob: bytes, target: Optional[int] = None) -> int:
+        nonlocal bin_len
+        blob = _pad4(blob)
+        bv = {"buffer": 0, "byteOffset": bin_len, "byteLength": len(blob)}
+        if target is not None:
+            bv["target"] = target
+        buffer_views.append(bv)
+        bin_parts.append(blob)
+        bin_len += len(blob)
+        return len(buffer_views) - 1
+
+    for sm in submeshes:
+        # ---- index buffer (u32) ----
+        idx = b"".join(struct.pack("<III", a, b, c) for a, b, c in sm.tris)
+        idx_bv = add_view(idx, target=34963)  # ELEMENT_ARRAY_BUFFER
+        idx_count = len(sm.tris) * 3
+        accessors.append({"bufferView": idx_bv, "componentType": 5125,  # UNSIGNED_INT
+                          "count": idx_count, "type": "SCALAR"})
+        idx_acc = len(accessors) - 1
+        # ---- POSITION (f32x3, Y-up) ----
+        ys = [(e, z, -n) for (e, n, z) in sm.verts]
+        pos = b"".join(struct.pack("<fff", *v) for v in ys)
+        pos_bv = add_view(pos, target=34962)  # ARRAY_BUFFER
+        mins = [min(c[i] for c in ys) for i in range(3)]
+        maxs = [max(c[i] for c in ys) for i in range(3)]
+        accessors.append({"bufferView": pos_bv, "componentType": 5126,  # FLOAT
+                          "count": len(ys), "type": "VEC3", "min": mins, "max": maxs})
+        pos_acc = len(accessors) - 1
+        # ---- TEXCOORD_0 (f32x2) ----
+        uvb = b"".join(struct.pack("<ff", u, v) for u, v in sm.uvs)
+        uv_bv = add_view(uvb, target=34962)
+        accessors.append({"bufferView": uv_bv, "componentType": 5126,
+                          "count": len(sm.uvs), "type": "VEC2"})
+        uv_acc = len(accessors) - 1
+        # ---- texture image ----
+        img_bv = add_view(sm.jpeg)
+        images.append({"bufferView": img_bv, "mimeType": "image/jpeg",
+                       "name": f"node_{sm.node_id}"})
+        textures.append({"sampler": 0, "source": len(images) - 1})
+        materials.append({"name": f"m{sm.node_id}", "doubleSided": True,
+                          "pbrMetallicRoughness": {
+                              "baseColorTexture": {"index": len(textures) - 1},
+                              "metallicFactor": 0.0, "roughnessFactor": 1.0}})
+        meshes.append({"name": f"node_{sm.node_id}", "primitives": [{
+            "attributes": {"POSITION": pos_acc, "TEXCOORD_0": uv_acc},
+            "indices": idx_acc, "material": len(materials) - 1, "mode": 4}]})
+        nodes.append({"name": f"node_{sm.node_id}", "mesh": len(meshes) - 1})
+
+    bin_blob = _pad4(b"".join(bin_parts))
+    gltf = {
+        "asset": {"version": "2.0", "generator": "OpenMap_Unifier dommesh"},
+        "extras": {"anchor_epsg25832": list(anchor)},
+        "scene": 0, "scenes": [{"nodes": list(range(len(nodes)))}],
+        "nodes": nodes, "meshes": meshes,
+        "materials": materials, "textures": textures, "images": images,
+        "samplers": samplers, "accessors": accessors, "bufferViews": buffer_views,
+        "buffers": [{"byteLength": len(bin_blob)}],
+    }
+    json_blob = _pad4(json.dumps(gltf, separators=(",", ":")).encode("utf-8"), b" ")
+    total = 12 + 8 + len(json_blob) + 8 + len(bin_blob)
+    with open(out_path, "wb") as fh:
+        fh.write(struct.pack("<4sII", b"glTF", 2, total))
+        fh.write(struct.pack("<I4s", len(json_blob), b"JSON")); fh.write(json_blob)
+        fh.write(struct.pack("<I4s", len(bin_blob), b"BIN\x00")); fh.write(bin_blob)

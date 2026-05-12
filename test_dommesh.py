@@ -120,3 +120,56 @@ def test_write_obj_emits_mtl_and_texture(tmp_path):
     mtl = (tmp_path / "cutout.mtl").read_text()
     assert "newmtl m7" in mtl and "map_Kd tex/node_7.jpg" in mtl
     assert (tmp_path / "tex" / "node_7.jpg").read_bytes() == b"\xff\xd8\xff\xd9"
+
+
+def _parse_glb(data: bytes):
+    magic, version, length = struct.unpack("<4sII", data[:12])
+    assert magic == b"glTF" and version == 2 and length == len(data)
+    p = 12
+    chunks = []
+    while p < len(data):
+        clen, ctype = struct.unpack("<I4s", data[p:p + 8]); p += 8
+        chunks.append((ctype, data[p:p + clen])); p += clen
+    return chunks
+
+
+def test_write_glb_structure_and_roundtrip(tmp_path):
+    out = tmp_path / "cutout.glb"
+    dommesh.write_glb(str(out), [_tiny_submesh(3), _tiny_submesh(4)],
+                      anchor=(690000.0, 5506000.0))
+    data = out.read_bytes()
+    chunks = _parse_glb(data)
+    assert chunks[0][0] == b"JSON"
+    assert chunks[1][0] == b"BIN\x00"
+    assert len(chunks[1][1]) % 4 == 0          # BIN chunk is 4-byte aligned
+    gltf = json.loads(chunks[0][1])
+    assert gltf["asset"]["version"] == "2.0"
+    assert len(gltf["meshes"]) == 2 and len(gltf["nodes"]) == 2
+    assert len(gltf["images"]) == 2 and len(gltf["materials"]) == 2
+    assert len(gltf["scenes"]) == 1 and set(gltf["scenes"][0]["nodes"]) == {0, 1}
+    # accessors: 3 per submesh (POSITION, TEXCOORD_0, indices) -> 6 total
+    assert len(gltf["accessors"]) == 6
+    # The embedded JPEG bytes survive: find an image bufferView and slice the BIN.
+    bv = gltf["bufferViews"][gltf["images"][0]["bufferView"]]
+    blob = chunks[1][1][bv["byteOffset"]:bv["byteOffset"] + bv["byteLength"]]
+    assert blob == b"\xff\xd8\xff\xd9"
+
+
+def test_write_glb_maps_to_yup():
+    # POSITION in glTF must be (easting, height, -northing); verts here are
+    # already anchor-relative, so vert (1, 2, 3) -> (1, 3, -2).
+    sm = dommesh.SubMesh(node_id=1, verts=[(1.0, 2.0, 3.0), (0, 0, 0), (0, 0, 0)],
+                         uvs=[(0, 0)] * 3, tris=[(0, 1, 2)], jpeg=b"\xff\xd8\xff\xd9")
+    import tempfile, os as _os
+    path = _os.path.join(tempfile.mkdtemp(), "g.glb")
+    dommesh.write_glb(path, [sm], anchor=(0.0, 0.0))
+    chunks = _parse_glb(open(path, "rb").read())
+    gltf = json.loads(chunks[0][1])
+    pos_acc = gltf["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
+    acc = gltf["accessors"][pos_acc]
+    bv = gltf["bufferViews"][acc["bufferView"]]
+    raw = chunks[1][1][bv["byteOffset"]:bv["byteOffset"] + bv["byteLength"]]
+    first = struct.unpack("<fff", raw[:12])
+    assert first == pytest.approx((1.0, 3.0, -2.0))
+    # accessor min/max present (glTF validators require it for POSITION).
+    assert "min" in acc and "max" in acc
