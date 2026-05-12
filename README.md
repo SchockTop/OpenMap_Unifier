@@ -9,6 +9,10 @@ A desktop application for downloading and processing geodata from Bayern's OpenG
 - **Relief Data**: Download shaded relief tiles
 - **Metalink Downloads**: Bulk download from .meta4 files
 - **Web Interface**: Optional FastAPI-based web server
+- **DOM-Mesh 3D cutout**: Cut a small textured photogrammetry-mesh slice (OBJ + GLB)
+  out of Bayern's DOM-Mesh from a Google Earth KML polygon — range-fetched, no
+  multi-GB download. (`backend/dommesh.py`; "DOM-Mesh — Photogrammetric 3D city mesh"
+  in the Bayern picker / `POST /start-download-dommesh`.)
 
 ## Requirements
 
