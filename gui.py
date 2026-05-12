@@ -671,6 +671,13 @@ class OpenMapUnifierApp(ctk.CTk):
                     args=(poly, key, out_dir),
                     daemon=True,
                 ).start()
+            elif meta["kind"] == "mesh":
+                self.add_download_row(meta["label"], "Picking flight-day Los...", 0, "Calculating", "...")
+                threading.Thread(
+                    target=self._run_bayern_dommesh,
+                    args=(poly, key, out_dir),
+                    daemon=True,
+                ).start()
             else:  # wms
                 # DOP40 WMS uses the picker's format; relief WMS is always tiff.
                 wms_fmt = fmt if key == "dop40_wms" else "tiff"
@@ -689,6 +696,11 @@ class OpenMapUnifierApp(ctk.CTk):
         try:
             for key in selected_keys:
                 meta = BAYERN_DATASETS[key]
+                if meta["kind"] == "mesh":
+                    # Size depends entirely on AOI size & node count; we don't
+                    # know until we've indexed the Los. Don't block on it.
+                    per_dataset.append((meta["label"], 0, 0))
+                    continue
                 if meta["kind"] == "raw":
                     tiles = self.downloader.generate_1km_grid_files(poly, dataset=key)
                     n = len(tiles)
@@ -755,6 +767,34 @@ class OpenMapUnifierApp(ctk.CTk):
         for fname, _ in tiles:
             self.after(0, lambda f=fname: self.add_download_row(f, "Pending...", 0, "-", "-"))
         self.run_downloads_batch(tiles)
+
+    def _run_bayern_dommesh(self, poly, key, out_dir):
+        """Download a DOM-Mesh slice (OBJ + GLB) cut to the polygon.
+
+        Range-fetches only the I3S leaf nodes that overlap the polygon out of
+        Bayern's per-Los DSM_Mesh.slpk (see backend/dommesh.py) — no multi-GB
+        district download.
+        """
+        from backend.dommesh import cutout
+
+        label = BAYERN_DATASETS[key]["label"]
+
+        def progress_cb(name, percent, status, speed="-", eta="-"):
+            self.after(0, lambda: self.add_download_row(label, status, percent, speed, eta))
+
+        try:
+            meta = cutout(poly, out_dir, formats=("obj", "glb"), progress=progress_cb)
+        except Exception as e:  # noqa: BLE001 - surface anything to the UI
+            self.after(0, lambda: self.add_download_row(label, f"Error: {e}", 0, "-", "-"))
+            print(f"[ERROR] dommesh: {e}")
+            return
+        if "error" in meta:
+            self.after(0, lambda: self.add_download_row(label, meta["error"], 0, "-", "-"))
+            return
+        msg = (f"Done — {meta['triangles']} tris, {meta['leaf_nodes']} nodes, "
+               f"Los {meta['losid']}")
+        self.after(0, lambda: self.add_download_row(label, msg, 100, "-", "-"))
+        print(f"[INFO] dommesh -> {out_dir}: {json.dumps(meta)}")
 
     def add_download_row(self, filename, status, percent, speed, eta):
         if filename in self.download_rows:
