@@ -400,6 +400,8 @@ def _entries_from_tail(tail: bytes, base: int) -> dict[str, tuple[int, int, int,
         e = tail.rfind(_EOCD_SIG)
         cd_size = struct.unpack("<I", tail[e + 12:e + 16])[0]
         cd_off = struct.unpack("<I", tail[e + 16:e + 20])[0]
+        # Precondition: cd_off >= base (guaranteed because the 70 MB tail
+        # covers the entire central directory of any realistic SLPK).
     cd = tail[cd_off - base:cd_off - base + cd_size]
     return _parse_cd_records(cd)
 
@@ -416,7 +418,7 @@ class SlpkReader:
         self.bytes_fetched = 0
 
     # ---- low-level range I/O with mirror fallback ----
-    def _request(self, headers: dict) -> tuple[bytes, dict]:
+    def _request(self, headers: dict):
         last = None
         for url in self._mirrors:
             try:
@@ -425,7 +427,7 @@ class SlpkReader:
                 with urllib.request.urlopen(req, timeout=120) as r:
                     data = r.read()
                     self.bytes_fetched += len(data)
-                    return data, dict(r.headers)
+                    return data, r.headers  # HTTPMessage: case-insensitive .get()
             except Exception as ex:  # noqa: BLE001 - we genuinely want to try the next mirror
                 last = ex
         raise RuntimeError(f"all mirrors failed for {self.losid}: {last}")
@@ -464,6 +466,9 @@ class SlpkReader:
     def read_entry(self, name: str) -> bytes:
         off, csize, _usize, _method = self.entries()[name]
         hdr = self._rng(off, off + 30 + 512)     # local header + filename + (small) extra
+        fnlen, eflen = struct.unpack("<HH", hdr[26:30])
+        if len(hdr) < 30 + fnlen + eflen:
+            hdr = self._rng(off, off + 30 + fnlen + eflen)
         ds = _payload_offset(hdr, off)
         data = self._rng(ds, ds + csize - 1)
         assert len(data) == csize, (name, len(data), csize)
@@ -477,14 +482,15 @@ class SlpkReader:
         if os.path.exists(cache):
             self._nodes = json.loads(Path(cache).read_text())
             return self._nodes
-        _scene = json.loads(self.read_entry("3dSceneLayer.json.gz"))
+        # Count pages from the central-directory entries (more robust than looping
+        # until 404; mirrors the proven spike's slpk_index.py approach).
+        n_pages = sum(1 for k in self.entries() if k.startswith("nodepages/"))
         out: list[dict] = []
-        page = 0
-        while True:
+        for page in range(n_pages):
             try:
                 pg = json.loads(self.read_entry(f"nodepages/{page}.json.gz"))
             except Exception:
-                break
+                continue
             for nd in pg.get("nodes", []):
                 if "mesh" not in nd or nd.get("children"):
                     continue
@@ -498,7 +504,6 @@ class SlpkReader:
                     "geom_res": mesh.get("geometry", {}).get("resource"),
                     "mat_res": mesh.get("material", {}).get("resource"),
                 })
-            page += 1
         self._nodes = out
         Path(cache).write_text(json.dumps(out))
         return self._nodes

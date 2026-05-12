@@ -268,3 +268,27 @@ def test_cutout_no_los_returns_error(tmp_path):
     meta = dommesh.cutout("SRID=4326;POLYGON((11.6 49.7, 11.61 49.7, 11.61 49.71, 11.6 49.7))",
                           str(tmp_path), _reader_factory=_FakeReader, _los_index_factory=_Empty)
     assert "error" in meta and "DOM-Mesh" in meta["error"]
+
+
+@pytest.mark.needs_network
+def test_live_cutout_auerbach(tmp_path):
+    # The spike's "out_altstadt" rectangle: center EPSG:25832 (690137, 5506889),
+    # ~160 m half-size, expressed as a 4-corner WGS84 polygon.
+    from pyproj import Transformer
+    tf = Transformer.from_crs("EPSG:25832", "EPSG:4326", always_xy=True)
+    cx, cy, h = 690137.0, 5506889.0, 160.0
+    corners = [(cx - h, cy - h), (cx + h, cy - h), (cx + h, cy + h),
+               (cx - h, cy + h), (cx - h, cy - h)]
+    ll = [tf.transform(x, y) for x, y in corners]
+    ewkt = "SRID=4326;POLYGON((" + ", ".join(f"{lon} {lat}" for lon, lat in ll) + "))"
+
+    meta = dommesh.cutout(ewkt, str(tmp_path), formats=("obj", "glb"))
+    assert "error" not in meta, meta
+    assert meta["triangles"] > 1000
+    assert meta["leaf_nodes"] >= 1
+    assert meta["bytes_fetched"] is not None
+    assert (tmp_path / "cutout.obj").stat().st_size > 0
+    assert (tmp_path / "cutout.glb").stat().st_size > 0
+    # Sanity: nowhere near a full-Los download (first run includes the ~62 MB
+    # central directory; cached runs are far smaller).
+    assert meta["bytes_fetched"] < 200 * 1024 * 1024
