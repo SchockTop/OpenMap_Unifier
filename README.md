@@ -13,6 +13,36 @@ A desktop application for downloading and processing geodata from Bayern's OpenG
   out of Bayern's DOM-Mesh from a Google Earth KML polygon — range-fetched, no
   multi-GB download. (`backend/dommesh.py`; "DOM-Mesh — Photogrammetric 3D city mesh"
   in the Bayern picker / `POST /start-download-dommesh`.)
+- **Infrared (DOP20 CIR)**: Near-infrared / color-infrared aerial imagery, 20 cm —
+  vegetation glows red, water reads dark. Bavaria's only free IR imagery
+  (WMS `by_dop20cir`; in the Bayern picker under "Infrared"). There is no raw CIR
+  tile and no short-wave IR in Bavaria's aerial data — for real SWIR use Sentinel-2.
+- **Sentinel-2 (satellite + real SWIR)**: True multispectral satellite imagery
+  incl. short-wave infrared (B11/B12) and NIR, with derived indices
+  (NDVI/NDBI/MNDWI/NBR/NDMI). Free, no login, no Hugging Face — works behind a
+  corporate proxy. (`backend/sentinel2_downloader.py`, `python download_sentinel2.py <polygon>`.)
+- **ESA WorldCover (land cover)**: Free global 10 m land-cover labels (11 classes) —
+  weak training labels to complement OSM land-use.
+  (`backend/worldcover_downloader.py`, `python download_worldcover.py <polygon>`.)
+
+### New map sources — usage
+
+All take the **same polygon** (WKT string or a `.wkt` file, EPSG:4326 lon/lat). The
+Bayern CIR layer downloads through the existing GUI/Web picker (category *Infrared*).
+Sentinel-2 and WorldCover have standalone CLIs (and `backend/` modules for the app):
+
+```bash
+# Sentinel-2: true-colour + NIR + SWIR, cropped to the polygon, with indices
+python download_sentinel2.py region.wkt --bands red green blue nir swir16 swir22 \
+       --date 2023-06-01/2023-09-30 --max-cloud 15 --indices
+
+# ESA WorldCover land-cover labels, cropped to the polygon
+python download_worldcover.py region.wkt --hist
+```
+
+Cropping to the polygon uses `rasterio` when installed (`pip install rasterio`);
+without it the whole satellite/land-cover tile is downloaded instead. The core
+Bayern tile/WMS downloads need no GDAL.
 
 ## Requirements
 

@@ -165,6 +165,26 @@ BAYERN_DATASETS = {
         "kind": "raw",
         "url_path": "laser/data",
     },
+    # ---- INFRARED (WMS-rendered) ----
+    "dop20cir_wms": {
+        # Color-Infrared (CIR) orthophoto: the WMS renders the near-infrared
+        # band as red, so vegetation glows red and water reads near-black.
+        # This is Bavaria's only freely-served infrared imagery — there is NO
+        # raw CIR tile and NO short-wave IR (SWIR); for true SWIR use the
+        # Sentinel-2 source (backend/sentinel2_downloader.py). Verified live:
+        # layer "by_dop20cir" is advertised by the dop20 WMS GetCapabilities
+        # and GetMap returns a valid image.
+        "label": "DOP20 CIR — Color-Infrared / NIR 20 cm (vegetation, water)",
+        "category": "infrared",
+        "description": "Near-infrared (color-infrared) aerial imagery, 20cm. NIR rendered as red — "
+                       "strong for vegetation/material discrimination. WMS-rendered (no raw CIR tile exists).",
+        "ext": ".tiff",
+        "resolution": "20 cm / pixel (WMS render)",
+        "kind": "wms",
+        "base_url": "https://geoservices.bayern.de/od/wms/dop/v1/dop20",
+        "layer": "by_dop20cir",
+        "mime": "image/tiff",
+    },
     # ---- WMS-RENDERED (visual) ----
     "relief_wms": {
         "label": "Relief (hillshade WMS)",
@@ -191,6 +211,7 @@ BAYERN_DATASETS = {
 }
 
 BAYERN_CATEGORY_LABELS = {
+    "infrared":   "Infrared (near-IR / color-infrared)",
     "height":     "Height / Terrain (raw elevation)",
     "ortho":      "Orthophotos (aerial imagery)",
     "buildings":  "3D Buildings",
@@ -498,6 +519,70 @@ class MapDownloader:
             return tiles
         except Exception as e:
             print(f"[ERROR] generating tiles: {e}")
+            return []
+
+    def generate_wms_tiles(self, polygon_wkt, dataset, high_res=False):
+        """Catalog-driven WMS GetMap tiles for ANY ``kind == "wms"`` dataset.
+
+        Reads ``base_url`` / ``layer`` / ``mime`` straight from BAYERN_DATASETS,
+        so adding a new WMS layer (e.g. ``dop20cir_wms``) needs only a catalog
+        entry — no special-casing. Same 1 km EPSG:25832 grid and request shape
+        as ``generate_relief_tiles`` (WMS 1.1.1, srs=EPSG:25832), which is the
+        combination verified against Bavaria's relief / DOP / CIR services.
+
+        Returns ``[(file_name, url), ...]``.
+        """
+        try:
+            meta = BAYERN_DATASETS.get(dataset)
+            if not meta or meta.get("kind") != "wms":
+                print(f"[WARN] '{dataset}' is not a WMS dataset — nothing to generate.")
+                return []
+            base_url = meta["base_url"]
+            layer = meta["layer"]
+            mime = meta.get("mime", "image/tiff")
+            # Extension from the catalog, else derive from the MIME type.
+            ext = meta.get("ext", "." + {"image/jpeg": "jpg", "image/png": "png"}.get(mime, "tiff"))
+            ext = ext.lstrip(".")
+
+            if ";" in polygon_wkt:
+                polygon_wkt = polygon_wkt.split(";", 1)[1]
+            poly = loads(polygon_wkt)
+            transformer = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
+            projected_poly = Polygon([transformer.transform(c[0], c[1]) for c in poly.exterior.coords])
+
+            minx, miny, maxx, maxy = projected_poly.bounds
+            grid_res = 1000
+            start_x = math.floor(minx / grid_res) * grid_res
+            start_y = math.floor(miny / grid_res) * grid_res
+            end_x = math.ceil(maxx / grid_res) * grid_res
+            end_y = math.ceil(maxy / grid_res) * grid_res
+
+            if high_res:
+                width = height = 5906
+                dpi_params = "&DPI=300&MAP_RESOLUTION=300&FORMAT_OPTIONS=dpi:300"
+            else:
+                width = height = 2000
+                dpi_params = ""
+
+            tiles = []
+            for x in range(start_x, end_x, grid_res):
+                for y in range(start_y, end_y, grid_res):
+                    tile_box = box(x, y, x + grid_res, y + grid_res)
+                    if projected_poly.intersects(tile_box):
+                        file_name = f"{layer}_{int(x)}_{int(y)}.{ext}"
+                        url = (
+                            f"{base_url}?"
+                            f"service=wms&version=1.1.1&request=GetMap"
+                            f"&format={mime}&transparent=true"
+                            f"&layers={layer}"
+                            f"&srs=EPSG:25832&STYLES="
+                            f"&WIDTH={width}&HEIGHT={height}{dpi_params}"
+                            f"&BBOX={int(x)},{int(y)},{int(x + grid_res)},{int(y + grid_res)}"
+                        )
+                        tiles.append((file_name, url))
+            return tiles
+        except Exception as e:
+            print(f"[ERROR] generating WMS tiles for '{dataset}': {e}")
             return []
 
     def generate_1km_grid_files(self, polygon_wkt, dataset="dgm1"):

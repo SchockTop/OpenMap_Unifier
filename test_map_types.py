@@ -229,20 +229,18 @@ class TestCatalogShape(unittest.TestCase):
                     f"{key}: filename {fname!r} should end with {meta['ext']!r}",
                 )
 
-    def test_generate_relief_tiles_for_every_wms_dataset(self):
+    def test_generate_wms_tiles_for_every_wms_dataset(self):
+        # Use the catalog-driven generator (generate_wms_tiles), which reads
+        # base_url/layer/mime straight from the catalog and therefore supports
+        # every wms dataset incl. the CIR (infrared) layer. The legacy
+        # generate_relief_tiles only special-cased relief + dop40 and could not
+        # emit a CIR URL (it forces any "dop" layer to by_dop40c).
         dl = MapDownloader(download_dir="downloads_test")
         for key, meta in BAYERN_DATASETS.items():
             if meta["kind"] != "wms":
                 continue
             with self.subTest(dataset=key):
-                # format_ext carries a hint for DOP ("tif" vs default jpg);
-                # for relief the generator picks the right mime on its own.
-                format_ext = "tif" if meta["mime"] == "image/tiff" else "jpg"
-                tiles = dl.generate_relief_tiles(
-                    MUNICH_POLYGON_WKT,
-                    layer=meta["layer"],
-                    format_ext=format_ext,
-                )
+                tiles = dl.generate_wms_tiles(MUNICH_POLYGON_WKT, key)
                 self.assertTrue(tiles, f"{key}: no tiles generated")
                 fname, url = tiles[0]
                 parsed = urlparse(url)

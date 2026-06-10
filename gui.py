@@ -707,10 +707,8 @@ class OpenMapUnifierApp(ctk.CTk):
                     mb = n * meta.get("avg_tile_mb", 0)
                 else:
                     # WMS: ~5 MB/tile high-res, ~1 MB/tile standard — rough.
-                    tiles = self.downloader.generate_relief_tiles(
-                        poly, layer=meta.get("layer", "dop40"),
-                        format_ext="tif" if key == "relief_wms" else "jpg",
-                        high_res=False)
+                    # Catalog-driven so any wms dataset (relief, dop40, CIR) works.
+                    tiles = self.downloader.generate_wms_tiles(poly, key, high_res=False)
                     n = len(tiles)
                     mb = n * 1
                 per_dataset.append((meta["label"], n, mb))
@@ -751,14 +749,12 @@ class OpenMapUnifierApp(ctk.CTk):
                 print(f"[WARN] {key}: worldfile generation failed: {e}")
 
     def _run_bayern_wms(self, poly, key, fmt, high_res, out_dir):
-        """Download a WMS-rendered Bayern dataset (relief, dop40_wms)."""
+        """Download a WMS-rendered Bayern dataset (relief, dop40_wms, dop20cir_wms)."""
         self.downloader.download_dir = out_dir
-        meta = BAYERN_DATASETS[key]
-        # generate_relief_tiles historically uses layer="by_relief_schraeglicht"
-        # for relief and "dop40" to trigger DOP40 inside the downloader.
-        layer = meta["layer"] if key == "relief_wms" else "dop40"
-        tiles = self.downloader.generate_relief_tiles(
-            poly, layer=layer, format_ext=fmt, high_res=high_res)
+        # Catalog-driven: base_url/layer/mime come straight from BAYERN_DATASETS,
+        # so relief, DOP40 and the new CIR (infrared) layer all dispatch here
+        # with no per-key special-casing.
+        tiles = self.downloader.generate_wms_tiles(poly, key, high_res=high_res)
         if not tiles:
             self.after(0, lambda: self.add_download_row(
                 key.upper(), "No intersecting tiles found.", 0, "Error", ""))

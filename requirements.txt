@@ -12,3 +12,8 @@ packaging>=23.0
 # Optional: NTLM authentication for corporate proxies
 # Uncomment if needed in your environment
 # requests-ntlm>=1.2.0
+
+# Optional: crop Sentinel-2 / ESA WorldCover to the drawn polygon (windowed COG
+# reads). Without it those sources download the whole tile instead; the Bayern
+# tile / WMS / CIR downloads do NOT need this.
+# rasterio>=1.3.0
