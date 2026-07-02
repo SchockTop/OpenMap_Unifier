@@ -24,6 +24,13 @@ A desktop application for downloading and processing geodata from Bayern's OpenG
 - **ESA WorldCover (land cover)**: Free global 10 m land-cover labels (11 classes) —
   weak training labels to complement OSM land-use.
   (`backend/worldcover_downloader.py`, `python download_worldcover.py <polygon>`.)
+- **DOM20 (surface model)**: First-return surface elevation (roofs, canopy), 20 cm
+  GeoTIFF tiles. DOM20 − DGM1 = nDSM (object height above ground) — the height cue
+  the materialmap classifier uses. (Bayern picker category *Height*.)
+- **materialmap stack CLI**: One command for everything the materialmap pipeline
+  (ReadSearch repo) consumes — DGM1 + DOM20 (+ NIR/CIR, raw DOP20, LiDAR LAZ) —
+  through the same proxy config as the GUI, optionally renamed into the layout the
+  materialmap scripts read. (`python download_materialmap.py <polygon>`.)
 
 ### New map sources — usage
 

@@ -99,6 +99,24 @@ BAYERN_DATASETS = {
         "grid_km": 1,
         "tile_prefix": "",
     },
+    "dom20": {
+        # Surface model (first return: roofs, canopy) — pairs with DGM1 to
+        # form the nDSM (DOM20 − DGM1), the height cue the materialmap
+        # classifier uses to separate roofs from ground. Filename pattern
+        # verified live: /a/dom20/DOM/32689_5333_20_DOM.tif → 200, ~44 MB.
+        "label": "DOM20 — Digital Surface Model (first return, 20 cm)",
+        "category": "height",
+        "description": "Surface elevation incl. buildings/trees, 20cm grid, GeoTIFF. "
+                       "DOM20 − DGM1 = nDSM (object height above ground).",
+        "ext": ".tif",
+        "resolution": "20 cm / pixel",
+        "pixel_size_m": 0.2,
+        "avg_tile_mb": 44,
+        "kind": "raw",
+        "url_path": "dom20/DOM",
+        "tile_prefix": "32",
+        "tile_suffix": "_20_DOM",
+    },
     # ---- ORTHOPHOTOS (raw) ----
     "dop20": {
         "label": "DOP20 RGB — Orthophoto 20 cm (Highest quality)",
@@ -626,6 +644,9 @@ class MapDownloader:
             # the historical behaviour so DOP catalog entries don't have to
             # opt in.
             tile_prefix = meta.get("tile_prefix", "32")
+            # Some products append a product marker between the grid id and
+            # the extension (DOM20: "32<e>_<n>_20_DOM.tif").
+            tile_suffix = meta.get("tile_suffix", "")
 
             minx, miny, maxx, maxy = projected_poly.bounds
             start_x = math.floor(minx / grid_res) * grid_res
@@ -639,14 +660,15 @@ class MapDownloader:
                 for y in range(start_y, end_y, grid_res):
                     tile_box = box(x, y, x + grid_res, y + grid_res)
                     if projected_poly.intersects(tile_box):
-                        # Naming: <tile_prefix><east_km>_<north_km><ext>.
-                        # DOP:  "32672_5424.tif"  (tile_prefix="32")
-                        # DGM:  "672_5424.tif"    (tile_prefix="")
+                        # Naming: <tile_prefix><east_km>_<north_km><tile_suffix><ext>.
+                        # DOP:  "32672_5424.tif"         (tile_prefix="32")
+                        # DGM:  "672_5424.tif"           (tile_prefix="")
+                        # DOM20:"32672_5424_20_DOM.tif"  (tile_suffix="_20_DOM")
                         east_km = int(x / 1000)
                         north_km = int(y / 1000)
                         tile_id = f"{tile_prefix}{east_km}_{north_km}"
 
-                        file_name = f"{tile_id}{ext}"
+                        file_name = f"{tile_id}{tile_suffix}{ext}"
                         urls = [f"{base}/{file_name}" for base in base_urls]
                         files.append((file_name, urls))
 
